@@ -132,7 +132,7 @@ sudo chown -R 1001:1001 data/uploads data/logs
 
 ```bash
 sudo cp /opt/hpys/nginx/hpys-host.conf /etc/nginx/sites-available/hpys
-# Edit YOUR_DOMAIN + SSL paths
+# Config already uses hpys.in / www.hpys.in / api26.hpys.in / files.hpys.in
 sudo ln -sf /etc/nginx/sites-available/hpys /etc/nginx/sites-enabled/hpys
 sudo nginx -t && sudo systemctl reload nginx
 ```
@@ -189,7 +189,9 @@ curl -sS -o /dev/null -w '%{http_code}\n' -X POST http://127.0.0.1:8000/api/reel
 curl -sS http://127.0.0.1:8000/api/reels/init
 
 # Via host Nginx / Cloudflare
-curl -fsS https://YOUR_DOMAIN/health
+curl -fsS https://hpys.in/health
+curl -fsS https://api26.hpys.in/health
+curl -sS -o /dev/null -w '%{http_code}\n' https://files.hpys.in/
 curl -sS -o /dev/null -w '%{http_code}\n' https://api26.hpys.in/api/reels
 
 docker compose ps
