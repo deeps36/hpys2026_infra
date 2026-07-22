@@ -61,6 +61,7 @@ MySQL (Hostinger Remote):
 | Backend | `https://github.com/avddev369/hpys2026_backend.git` | `/opt/hpys/backend` |
 
 Prefer `main` on all three after merges (Dockerfiles + this routing fix).
+`deploy.sh` checks out `DEPLOY_BRANCH` (default **`main`**) for frontend and backend on every run.
 
 ---
 

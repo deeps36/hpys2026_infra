@@ -159,9 +159,17 @@ fi
 pull_repo() {
   local dir="$1"
   local label="$2"
+  local branch="${DEPLOY_BRANCH:-main}"
   if [[ -d "${dir}/.git" ]]; then
-    log "Pulling latest ${label} code (${dir})"
-    git -C "${dir}" pull --ff-only
+    log "Updating ${label} to origin/${branch} (${dir})"
+    git -C "${dir}" fetch origin --prune
+    # Prefer the deployment branch so VM hotfixes / detached HEADs cannot stick
+    if git -C "${dir}" show-ref --verify --quiet "refs/remotes/origin/${branch}"; then
+      git -C "${dir}" checkout -B "${branch}" "origin/${branch}"
+    else
+      log "WARNING: origin/${branch} missing for ${label} — pulling current branch"
+      git -C "${dir}" pull --ff-only || true
+    fi
   elif [[ -d "${dir}" ]]; then
     log "${label} at ${dir} is not a git repo — skipping pull"
   else
