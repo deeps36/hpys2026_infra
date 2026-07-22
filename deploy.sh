@@ -27,9 +27,15 @@ BACKEND_DIR="./backend"
 IMAGE_TAG="${IMAGE_TAG:-latest}"
 HEALTH_TIMEOUT_SEC="${HEALTH_TIMEOUT_SEC:-180}"
 AUTO_ROLLBACK="${AUTO_ROLLBACK:-1}"
+# Always set under `set -u`. Empty = external MySQL (no compose profiles).
 COMPOSE_PROFILES="${COMPOSE_PROFILES:-}"
+DEPLOY_BRANCH="${DEPLOY_BRANCH:-main}"
+HPYS_DEPLOY_RESYNC="${HPYS_DEPLOY_RESYNC:-}"
 DEPLOY_LOG="${ROOT_DIR}/data/logs/deploy.log"
 HAD_PREVIOUS=0
+val=""
+v=""
+
 
 mkdir -p data/logs
 exec > >(tee -a "${DEPLOY_LOG}") 2>&1
@@ -58,7 +64,7 @@ log() { echo "==> $*"; }
 err() { echo "ERROR: $*" >&2; }
 
 uses_local_mysql() {
-  [[ "${COMPOSE_PROFILES}" == *"local-mysql"* ]]
+  [[ "${COMPOSE_PROFILES:-}" == *"local-mysql"* ]]
 }
 
 if [[ -f .env ]]; then
@@ -66,9 +72,12 @@ if [[ -f .env ]]; then
   val="$(read_env BACKEND_DIR)";  [[ -n "${val}" ]] && BACKEND_DIR="${val}"
   val="$(read_env IMAGE_TAG)";    [[ -n "${val}" ]] && IMAGE_TAG="${val}"
   val="$(read_env DEPLOY_BRANCH)"; [[ -n "${val}" ]] && DEPLOY_BRANCH="${val}"
-  val="$(trim "$(read_env COMPOSE_PROFILES)")"; COMPOSE_PROFILES="${val}"
+  # Empty COMPOSE_PROFILES= in .env is valid (external MySQL)
+  COMPOSE_PROFILES="$(trim "$(read_env COMPOSE_PROFILES)")"
 fi
+COMPOSE_PROFILES="${COMPOSE_PROFILES:-}"
 DEPLOY_BRANCH="${DEPLOY_BRANCH:-main}"
+IMAGE_TAG="${IMAGE_TAG:-latest}"
 
 log "HPYS deploy starting in ${ROOT_DIR}"
 date -u '+%Y-%m-%dT%H:%M:%SZ'
@@ -106,7 +115,7 @@ if uses_local_mysql; then
   else
     log "WARNING: local-mysql profile set but DB_HOST=${DB_HOST_VAL} (expected mysql for in-compose DB)"
   fi
-  log "Local MySQL profile enabled (COMPOSE_PROFILES=${COMPOSE_PROFILES})"
+  log "Local MySQL profile enabled (COMPOSE_PROFILES=${COMPOSE_PROFILES:-})"
 else
   # External MySQL — COMPOSE_PROFILES empty must not start mysql container
   if grep -E 'CHANGE_ME_' .env | grep -vE '^[[:space:]]*#|^[[:space:]]*MYSQL_ROOT_PASSWORD=' | grep -qE 'CHANGE_ME_'; then
@@ -164,7 +173,7 @@ fi
 sync_repo() {
   local dir="$1"
   local label="$2"
-  local branch="${DEPLOY_BRANCH}"
+  local branch="${DEPLOY_BRANCH:-main}"
 
   if [[ ! -d "${dir}/.git" ]]; then
     if [[ -d "${dir}" ]]; then
@@ -194,6 +203,10 @@ if [[ "${HPYS_DEPLOY_RESYNC:-}" != "1" ]]; then
     sync_repo "${ROOT_DIR}" "infra"
   fi
   export HPYS_DEPLOY_RESYNC=1
+  # Preserve optional env across re-exec (empty string is intentional)
+  export COMPOSE_PROFILES="${COMPOSE_PROFILES:-}"
+  export DEPLOY_BRANCH="${DEPLOY_BRANCH:-main}"
+  export IMAGE_TAG="${IMAGE_TAG:-latest}"
   log "Re-executing deploy.sh from synced infra tree"
   exec bash "${ROOT_DIR}/deploy.sh" "$@"
 fi
@@ -224,56 +237,59 @@ if ! uses_local_mysql; then
 fi
 
 log "Snapshotting current images as :previous (if present)"
-if docker image inspect "hpys-frontend:${IMAGE_TAG}" >/dev/null 2>&1; then
-  docker tag "hpys-frontend:${IMAGE_TAG}" hpys-frontend:previous
+if docker image inspect "hpys-frontend:${IMAGE_TAG:-latest}" >/dev/null 2>&1; then
+  docker tag "hpys-frontend:${IMAGE_TAG:-latest}" hpys-frontend:previous
   HAD_PREVIOUS=1
 fi
-if docker image inspect "hpys-backend:${IMAGE_TAG}" >/dev/null 2>&1; then
-  docker tag "hpys-backend:${IMAGE_TAG}" hpys-backend:previous
+if docker image inspect "hpys-backend:${IMAGE_TAG:-latest}" >/dev/null 2>&1; then
+  docker tag "hpys-backend:${IMAGE_TAG:-latest}" hpys-backend:previous
   HAD_PREVIOUS=1
 fi
 
+# Run docker compose with a clean child env: unset COMPOSE_PROFILES when empty so
+# Compose does not treat a blank export as an active profile list.
+compose() {
+  if [[ -n "${COMPOSE_PROFILES:-}" ]]; then
+    env IMAGE_TAG="${IMAGE_TAG:-latest}" COMPOSE_PROFILES="${COMPOSE_PROFILES}" \
+      docker compose "$@"
+  else
+    env -u COMPOSE_PROFILES IMAGE_TAG="${IMAGE_TAG:-latest}" \
+      docker compose "$@"
+  fi
+}
+
 rollback() {
-  if [[ "${AUTO_ROLLBACK}" != "1" || "${HAD_PREVIOUS}" != "1" ]]; then
-    log "Auto-rollback skipped (AUTO_ROLLBACK=${AUTO_ROLLBACK}, HAD_PREVIOUS=${HAD_PREVIOUS})"
+  if [[ "${AUTO_ROLLBACK:-1}" != "1" || "${HAD_PREVIOUS:-0}" != "1" ]]; then
+    log "Auto-rollback skipped (AUTO_ROLLBACK=${AUTO_ROLLBACK:-1}, HAD_PREVIOUS=${HAD_PREVIOUS:-0})"
     return 1
   fi
   err "Deploy unhealthy — attempting automatic rollback to :previous"
-  docker tag hpys-frontend:previous "hpys-frontend:${IMAGE_TAG}" || true
-  docker tag hpys-backend:previous "hpys-backend:${IMAGE_TAG}" || true
-  if [[ -n "${COMPOSE_PROFILES}" ]]; then
-    IMAGE_TAG="${IMAGE_TAG}" COMPOSE_PROFILES="${COMPOSE_PROFILES}" docker compose up -d --remove-orphans || true
-  else
-    IMAGE_TAG="${IMAGE_TAG}" docker compose up -d --remove-orphans || true
-  fi
+  docker tag hpys-frontend:previous "hpys-frontend:${IMAGE_TAG:-latest}" || true
+  docker tag hpys-backend:previous "hpys-backend:${IMAGE_TAG:-latest}" || true
+  compose up -d --remove-orphans || true
   sleep 5
-  docker compose ps || true
+  compose ps || true
   return 0
 }
 
-export IMAGE_TAG
+export IMAGE_TAG="${IMAGE_TAG:-latest}"
 export DOCKER_BUILDKIT=1
 export COMPOSE_DOCKER_CLI_BUILD=1
+# Always keep COMPOSE_PROFILES bound in this shell (set -u). Empty means no profiles.
+COMPOSE_PROFILES="${COMPOSE_PROFILES:-}"
 
-# Empty COMPOSE_PROFILES must be unset so Compose does not enable any profiles
-if [[ -n "${COMPOSE_PROFILES}" ]]; then
-  export COMPOSE_PROFILES
-else
-  unset COMPOSE_PROFILES || true
-fi
-
-log "Building images (tag=${IMAGE_TAG})"
-docker compose build --pull
+log "Building images (tag=${IMAGE_TAG:-latest})"
+compose build --pull
 
 log "Starting containers with force-recreate (profiles=${COMPOSE_PROFILES:-<none>})"
-docker compose up -d --force-recreate --remove-orphans
+compose up -d --force-recreate --remove-orphans
 
 # Ensure mysql container is NOT running in external mode
 if ! uses_local_mysql; then
   if docker ps --format '{{.Names}}' | grep -qx 'hpys-mysql'; then
     log "Stopping leftover local mysql container (external DB mode)"
-    docker compose --profile local-mysql stop mysql 2>/dev/null || docker stop hpys-mysql 2>/dev/null || true
-    docker compose --profile local-mysql rm -f mysql 2>/dev/null || docker rm -f hpys-mysql 2>/dev/null || true
+    env -u COMPOSE_PROFILES docker compose --profile local-mysql stop mysql 2>/dev/null || docker stop hpys-mysql 2>/dev/null || true
+    env -u COMPOSE_PROFILES docker compose --profile local-mysql rm -f mysql 2>/dev/null || docker rm -f hpys-mysql 2>/dev/null || true
   fi
 fi
 
@@ -282,13 +298,13 @@ if uses_local_mysql; then
   WAIT_SERVICES=(mysql backend frontend)
 fi
 
-log "Waiting for services to become healthy: ${WAIT_SERVICES[*]} (timeout ${HEALTH_TIMEOUT_SEC}s)"
+log "Waiting for services to become healthy: ${WAIT_SERVICES[*]} (timeout ${HEALTH_TIMEOUT_SEC:-180}s)"
 deadline=$((SECONDS + HEALTH_TIMEOUT_SEC))
 all_healthy=0
 while (( SECONDS < deadline )); do
   all_healthy=1
   for svc in "${WAIT_SERVICES[@]}"; do
-    cid="$(docker compose ps -q "${svc}" 2>/dev/null || true)"
+    cid="$(compose ps -q "${svc}" 2>/dev/null || true)"
     if [[ -z "${cid}" ]]; then
       all_healthy=0
       break
@@ -312,14 +328,14 @@ while (( SECONDS < deadline )); do
 done
 
 if (( all_healthy != 1 )); then
-  err "Services did not become healthy within ${HEALTH_TIMEOUT_SEC}s"
-  docker compose ps || true
-  docker compose logs --tail=100 || true
+  err "Services did not become healthy within ${HEALTH_TIMEOUT_SEC:-180}s"
+  compose ps || true
+  compose logs --tail=100 || true
   rollback || true
   err "Manual rollback (if needed):"
-  echo "  docker tag hpys-frontend:previous hpys-frontend:${IMAGE_TAG}"
-  echo "  docker tag hpys-backend:previous  hpys-backend:${IMAGE_TAG}"
-  echo "  IMAGE_TAG=${IMAGE_TAG} docker compose up -d"
+  echo "  docker tag hpys-frontend:previous hpys-frontend:${IMAGE_TAG:-latest}"
+  echo "  docker tag hpys-backend:previous  hpys-backend:${IMAGE_TAG:-latest}"
+  echo "  IMAGE_TAG=${IMAGE_TAG:-latest} docker compose up -d"
   exit 1
 fi
 
@@ -376,10 +392,10 @@ verify_route POST "http://127.0.0.1:8000/api/reels/upload"
 log "Post-deploy verification passed"
 
 log "Container status"
-docker compose ps
+compose ps
 
 log "Removing dangling images (keeps :previous and current tags)"
 docker image prune -f
 
 log "Deploy finished successfully at $(date -u '+%Y-%m-%dT%H:%M:%SZ')"
-docker compose ps
+compose ps
