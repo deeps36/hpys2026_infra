@@ -152,11 +152,11 @@ FILEBROWSER_PUBLIC_URL="${FILEBROWSER_PUBLIC_URL:-https://files.hpys.in}"
 FILEBROWSER_IMAGE="$(read_env FILEBROWSER_IMAGE)"
 FILEBROWSER_IMAGE="${FILEBROWSER_IMAGE:-filebrowser/filebrowser:v2.31.3}"
 
-# Nginx/Multer upload cap — NOT a fixed 2G. 0 = unlimited (nginx client_max_body_size 0).
+# Nginx/Multer upload cap (default 20G). Set UPLOAD_MAX_SIZE=0 for unlimited.
 UPLOAD_MAX_SIZE="$(trim "$(read_env UPLOAD_MAX_SIZE)")"
-UPLOAD_MAX_SIZE="${UPLOAD_MAX_SIZE:-0}"
+UPLOAD_MAX_SIZE="${UPLOAD_MAX_SIZE:-20G}"
 UPLOAD_MAX_BYTES="$(trim "$(read_env UPLOAD_MAX_BYTES)")"
-UPLOAD_MAX_BYTES="${UPLOAD_MAX_BYTES:-0}"
+UPLOAD_MAX_BYTES="${UPLOAD_MAX_BYTES:-21474836480}"
 
 # Vite URLs must be public HTTP(S) app URLs, not the MySQL hostname
 for vite_key in VITE_API_BASE_URL VITE_BACKEND_URL; do
@@ -238,8 +238,8 @@ if [[ "${HPYS_DEPLOY_RESYNC:-}" != "1" ]]; then
   export FILEBROWSER_PASSWORD="${FILEBROWSER_PASSWORD:-}"
   export FILEBROWSER_PUBLIC_URL="${FILEBROWSER_PUBLIC_URL:-https://files.hpys.in}"
   export FILEBROWSER_IMAGE="${FILEBROWSER_IMAGE:-filebrowser/filebrowser:v2.31.3}"
-  export UPLOAD_MAX_SIZE="${UPLOAD_MAX_SIZE:-0}"
-  export UPLOAD_MAX_BYTES="${UPLOAD_MAX_BYTES:-0}"
+  export UPLOAD_MAX_SIZE="${UPLOAD_MAX_SIZE:-20G}"
+  export UPLOAD_MAX_BYTES="${UPLOAD_MAX_BYTES:-21474836480}"
   log "Re-executing deploy.sh from synced infra tree"
   exec bash "${ROOT_DIR}/deploy.sh" "$@"
 fi

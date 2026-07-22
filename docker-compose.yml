@@ -173,8 +173,8 @@ services:
 
       LUDOKING_API_KEY: ${LUDOKING_API_KEY:-}
 
-      # 0 / empty = no Multer file-size cap (matches Nginx UPLOAD_MAX_SIZE=0)
-      UPLOAD_MAX_BYTES: ${UPLOAD_MAX_BYTES:-0}
+      # Multer file-size cap in bytes (default 20GiB). 0 = no Multer cap.
+      UPLOAD_MAX_BYTES: ${UPLOAD_MAX_BYTES:-21474836480}
       JSON_BODY_LIMIT: ${JSON_BODY_LIMIT:-100mb}
     ports:
       - "127.0.0.1:8000:8000"
