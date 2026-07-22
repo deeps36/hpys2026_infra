@@ -10,7 +10,7 @@ cd "${ROOT_DIR}"
 
 FB_DIR="${ROOT_DIR}/filebrowser"
 UPLOADS_DIR="${ROOT_DIR}/uploads"
-IMAGE="${FILEBROWSER_IMAGE:-filebrowser/filebrowser:v2.31.3}"
+IMAGE="${FILEBROWSER_IMAGE:-filebrowser/filebrowser:v2.32.0}"
 FB_USER="${FILEBROWSER_USERNAME:-admin}"
 FB_PASS="${FILEBROWSER_PASSWORD:-}"
 

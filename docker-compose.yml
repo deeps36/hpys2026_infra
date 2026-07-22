@@ -215,7 +215,7 @@ services:
       start_period: 60s
 
   filebrowser:
-    image: ${FILEBROWSER_IMAGE:-filebrowser/filebrowser:v2.31.3}
+    image: ${FILEBROWSER_IMAGE:-filebrowser/filebrowser:v2.32.0}
     pull_policy: missing
     platform: linux/arm64
     container_name: hpys-filebrowser

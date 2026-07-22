@@ -97,7 +97,7 @@ docker compose up -d filebrowser
 ```bash
 docker run --rm --user 1001:33 \
   -v /opt/hpys/filebrowser:/config \
-  filebrowser/filebrowser:v2.31.3 \
+  filebrowser/filebrowser:v2.32.0 \
   users add NEWUSER 'StrongPasswordHere' --database /config/database.db
 ```
 
@@ -106,7 +106,7 @@ Grant admin:
 ```bash
 docker run --rm --user 1001:33 \
   -v /opt/hpys/filebrowser:/config \
-  filebrowser/filebrowser:v2.31.3 \
+  filebrowser/filebrowser:v2.32.0 \
   users update NEWUSER --perm.admin --database /config/database.db
 ```
 
@@ -120,7 +120,7 @@ Or use **Settings → User Management** in the web UI while logged in as admin.
 ```bash
 docker run --rm --user 1001:33 \
   -v /opt/hpys/filebrowser:/config \
-  filebrowser/filebrowser:v2.31.3 \
+  filebrowser/filebrowser:v2.32.0 \
   users update admin -p 'NewStrongPassword' --database /config/database.db
 ```
 

@@ -150,7 +150,7 @@ FILEBROWSER_PASSWORD="$(read_env FILEBROWSER_PASSWORD)"
 FILEBROWSER_PUBLIC_URL="$(read_env FILEBROWSER_PUBLIC_URL)"
 FILEBROWSER_PUBLIC_URL="${FILEBROWSER_PUBLIC_URL:-https://files.hpys.in}"
 FILEBROWSER_IMAGE="$(read_env FILEBROWSER_IMAGE)"
-FILEBROWSER_IMAGE="${FILEBROWSER_IMAGE:-filebrowser/filebrowser:v2.31.3}"
+FILEBROWSER_IMAGE="${FILEBROWSER_IMAGE:-filebrowser/filebrowser:v2.32.0}"
 
 # Nginx/Multer upload cap (default 20G). Set UPLOAD_MAX_SIZE=0 for unlimited.
 UPLOAD_MAX_SIZE="$(trim "$(read_env UPLOAD_MAX_SIZE)")"
@@ -237,7 +237,7 @@ if [[ "${HPYS_DEPLOY_RESYNC:-}" != "1" ]]; then
   export FILEBROWSER_USERNAME="${FILEBROWSER_USERNAME:-admin}"
   export FILEBROWSER_PASSWORD="${FILEBROWSER_PASSWORD:-}"
   export FILEBROWSER_PUBLIC_URL="${FILEBROWSER_PUBLIC_URL:-https://files.hpys.in}"
-  export FILEBROWSER_IMAGE="${FILEBROWSER_IMAGE:-filebrowser/filebrowser:v2.31.3}"
+  export FILEBROWSER_IMAGE="${FILEBROWSER_IMAGE:-filebrowser/filebrowser:v2.32.0}"
   export UPLOAD_MAX_SIZE="${UPLOAD_MAX_SIZE:-20G}"
   export UPLOAD_MAX_BYTES="${UPLOAD_MAX_BYTES:-21474836480}"
   log "Re-executing deploy.sh from synced infra tree"
