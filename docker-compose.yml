@@ -2,14 +2,16 @@
 # HPYS 2026 — Production Docker Compose (Oracle Cloud ARM64 / Ubuntu 24.04)
 # Docker Compose (non-Swarm). Uses cpus/mem_limit — NOT Swarm deploy.resources.
 #
-# Bundled MySQL (default backward-compatible host "mysql"):
-#   COMPOSE_PROFILES=local-mysql docker compose up -d
-#   # or: docker compose --profile local-mysql up -d
+# DEFAULT (this project): external Hostinger MySQL
+#   COMPOSE_PROFILES=   (empty / unset)
+#   DB_HOST=srv1953.hstgr.io
+#   docker compose up -d
+#   → starts ONLY frontend + backend (mysql service is profile-gated)
 #
-# External MySQL (Hostinger / managed DB / remote):
-#   Set DB_HOST (and related *_HOST) in .env to the remote MySQL hostname/IP
-#   Leave COMPOSE_PROFILES unset and run: docker compose up -d
-#   (mysql service will not start; backend has no hard depends_on)
+# OPTIONAL bundled MySQL:
+#   COMPOSE_PROFILES=local-mysql
+#   DB_HOST=mysql
+#   docker compose --profile local-mysql up -d
 # =============================================================================
 
 x-logging: &default-logging

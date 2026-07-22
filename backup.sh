@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # =============================================================================
 # HPYS backup — MySQL logical dump + uploads archive, 30-day retention
+# External Hostinger (default) or local compose mysql (profile local-mysql).
 # Usage: ./backup.sh
-# Cron: 15 2 * * * /opt/hpys/backup.sh >> /opt/hpys/data/logs/backup.log 2>&1
 # =============================================================================
 set -euo pipefail
 
@@ -16,117 +16,101 @@ STAMP="$(date -u '+%Y%m%d_%H%M%S')"
 CONTAINER="${MYSQL_CONTAINER:-hpys-mysql}"
 TMP_DIR="$(mktemp -d /tmp/hpys-backup.XXXXXX)"
 
-cleanup() {
-  rm -rf "${TMP_DIR}"
-}
+cleanup() { rm -rf "${TMP_DIR}"; }
 trap cleanup EXIT
 
 read_env() {
   local key="$1"
   local val=""
   val="$(grep -E "^${key}=" .env | tail -n1 | cut -d= -f2- | tr -d '\r' || true)"
-  val="${val%\"}"
-  val="${val#\"}"
-  val="${val%\'}"
-  val="${val#\'}"
+  val="${val%\"}"; val="${val#\"}"; val="${val%\'}"; val="${val#\'}"
   printf '%s' "${val}"
 }
 
 mkdir -p "${BACKUP_DIR}"
+[[ -f .env ]] || { echo "ERROR: .env not found"; exit 1; }
 
-if [[ ! -f .env ]]; then
-  echo "ERROR: .env not found"
-  exit 1
-fi
-
-MYSQL_ROOT_PASSWORD="$(read_env MYSQL_ROOT_PASSWORD)"
-DB_DATABASE="$(read_env DB_DATABASE)"
-DB_DATABASE="${DB_DATABASE:-hpys_db}"
-
-REELS_METADATA_DB_NAME="$(read_env REELS_METADATA_DB_NAME)"
-REELS_METADATA_DB_NAME="${REELS_METADATA_DB_NAME:-hpys_reels_metadata}"
-PROFILE_DB_NAME="$(read_env PROFILE_DB_NAME)"
-PROFILE_DB_NAME="${PROFILE_DB_NAME:-hpys_profile_img}"
-
-REELS_DB_1_NAME="$(read_env REELS_DB_1_NAME)"; REELS_DB_1_NAME="${REELS_DB_1_NAME:-hpys_reels_db_1}"
-REELS_DB_2_NAME="$(read_env REELS_DB_2_NAME)"; REELS_DB_2_NAME="${REELS_DB_2_NAME:-hpys_reels_db_2}"
-REELS_DB_3_NAME="$(read_env REELS_DB_3_NAME)"; REELS_DB_3_NAME="${REELS_DB_3_NAME:-hpys_reels_db_3}"
-REELS_DB_4_NAME="$(read_env REELS_DB_4_NAME)"; REELS_DB_4_NAME="${REELS_DB_4_NAME:-hpys_reels_db_4}"
-REELS_DB_5_NAME="$(read_env REELS_DB_5_NAME)"; REELS_DB_5_NAME="${REELS_DB_5_NAME:-hpys_reels_db_5}"
-REELS_DB_6_NAME="$(read_env REELS_DB_6_NAME)"; REELS_DB_6_NAME="${REELS_DB_6_NAME:-hpys_reels_db_6}"
-
-if [[ -z "${MYSQL_ROOT_PASSWORD}" ]]; then
-  echo "ERROR: MYSQL_ROOT_PASSWORD missing in .env"
-  exit 1
-fi
-
-if ! docker ps --format '{{.Names}}' | grep -qx "${CONTAINER}"; then
-  echo "ERROR: MySQL container '${CONTAINER}' is not running"
-  exit 1
-fi
+COMPOSE_PROFILES="$(read_env COMPOSE_PROFILES)"
+DB_HOST="$(read_env DB_HOST)"
+DB_PORT="$(read_env DB_PORT)"; DB_PORT="${DB_PORT:-3306}"
+DEFAULT_USER="$(read_env DB_USERNAME)"
+DEFAULT_PASS="$(read_env DB_PASSWORD)"
 
 OUT_SQL="${TMP_DIR}/hpys_all_${STAMP}.sql"
 OUT_GZ="${BACKUP_DIR}/hpys_all_${STAMP}.sql.gz"
 OUT_UPLOADS="${BACKUP_DIR}/hpys_uploads_${STAMP}.tar.gz"
 
 echo "==> Starting backup at $(date -u '+%Y-%m-%dT%H:%M:%SZ')"
-echo "==> Dumping databases from ${CONTAINER}"
+: > "${OUT_SQL}"
 
-# Dump to temp on host via stdout; fail closed if mysqldump errors
-docker exec -e MYSQL_PWD="${MYSQL_ROOT_PASSWORD}" "${CONTAINER}" \
-  mysqldump \
-    -uroot \
-    --single-transaction \
-    --routines \
-    --triggers \
-    --events \
-    --hex-blob \
-    --max-allowed-packet=512M \
-    --set-gtid-purged=OFF \
-    --databases \
-      "${DB_DATABASE}" \
-      "${REELS_METADATA_DB_NAME}" \
-      "${REELS_DB_1_NAME}" \
-      "${REELS_DB_2_NAME}" \
-      "${REELS_DB_3_NAME}" \
-      "${REELS_DB_4_NAME}" \
-      "${REELS_DB_5_NAME}" \
-      "${REELS_DB_6_NAME}" \
-      "${PROFILE_DB_NAME}" \
-  > "${OUT_SQL}"
+dump_one() {
+  local db_name="$1" user="$2" pass="$3" host="$4" port="$5"
+  [[ -n "${db_name}" ]] || return 0
+  user="${user:-${DEFAULT_USER}}"
+  pass="${pass:-${DEFAULT_PASS}}"
+  host="${host:-${DB_HOST}}"
+  port="${port:-${DB_PORT}}"
 
-# Integrity checks before promoting to backups/
+  echo "==> Dumping database ${db_name} (@${host}:${port} as ${user})"
+
+  if [[ "${COMPOSE_PROFILES}" == *"local-mysql"* ]] && docker ps --format '{{.Names}}' | grep -qx "${CONTAINER}"; then
+    local root_pw
+    root_pw="$(read_env MYSQL_ROOT_PASSWORD)"
+    docker exec -e MYSQL_PWD="${root_pw}" "${CONTAINER}" \
+      mysqldump -uroot --single-transaction --routines --triggers --events \
+        --hex-blob --max-allowed-packet=512M --set-gtid-purged=OFF \
+        --databases "${db_name}" >> "${OUT_SQL}"
+  else
+    [[ -n "${host}" && -n "${user}" && -n "${pass}" ]] || {
+      echo "ERROR: missing host/user/password for ${db_name}"; exit 1
+    }
+    docker run --rm -e MYSQL_PWD="${pass}" mysql:8.0.43 \
+      mysqldump -h"${host}" -P"${port}" -u"${user}" \
+        --single-transaction --routines --triggers --events \
+        --hex-blob --max-allowed-packet=512M --set-gtid-purged=OFF \
+        --databases "${db_name}" >> "${OUT_SQL}"
+  fi
+}
+
+dump_one "$(read_env DB_DATABASE)" \
+  "$(read_env DB_USERNAME)" "$(read_env DB_PASSWORD)" \
+  "$(read_env DB_HOST)" "$(read_env DB_PORT)"
+
+dump_one "$(read_env REELS_METADATA_DB_NAME)" \
+  "$(read_env REELS_METADATA_DB_USER)" "$(read_env REELS_METADATA_DB_PASSWORD)" \
+  "$(read_env REELS_METADATA_DB_HOST)" "$(read_env REELS_METADATA_DB_PORT)"
+
+for i in 1 2 3 4 5 6; do
+  dump_one "$(read_env REELS_DB_${i}_NAME)" \
+    "$(read_env REELS_DB_${i}_USER)" "$(read_env REELS_DB_${i}_PASSWORD)" \
+    "$(read_env REELS_DB_${i}_HOST)" "$(read_env REELS_DB_${i}_PORT)"
+done
+
+dump_one "$(read_env PROFILE_DB_NAME)" \
+  "$(read_env PROFILE_DB_USER)" "$(read_env PROFILE_DB_PASSWORD)" \
+  "$(read_env PROFILE_DB_HOST)" "$(read_env PROFILE_DB_PORT)"
+
 if [[ ! -s "${OUT_SQL}" ]]; then
-  echo "ERROR: dump file is empty"
-  exit 1
+  echo "ERROR: dump file is empty"; exit 1
 fi
 if ! grep -q "Dump completed" "${OUT_SQL}"; then
-  echo "ERROR: dump does not contain 'Dump completed' marker — refusing to archive"
-  exit 1
+  echo "ERROR: dump missing 'Dump completed' marker"; exit 1
 fi
 
 gzip -9 -c "${OUT_SQL}" > "${OUT_GZ}.partial"
 mv -f "${OUT_GZ}.partial" "${OUT_GZ}"
 chmod 600 "${OUT_GZ}"
+echo "==> Wrote ${OUT_GZ} ($(du -h "${OUT_GZ}" | awk '{print $1}'))"
 
-SIZE="$(du -h "${OUT_GZ}" | awk '{print $1}')"
-echo "==> Wrote ${OUT_GZ} (${SIZE})"
-
-# Uploads are not in MySQL — back them up or restores are incomplete
 if [[ -d "${UPLOADS_DIR}" ]] && [[ -n "$(ls -A "${UPLOADS_DIR}" 2>/dev/null || true)" ]]; then
-  echo "==> Archiving uploads"
   tar -C "${UPLOADS_DIR}" -czf "${OUT_UPLOADS}.partial" .
   mv -f "${OUT_UPLOADS}.partial" "${OUT_UPLOADS}"
   chmod 600 "${OUT_UPLOADS}"
-  echo "==> Wrote ${OUT_UPLOADS} ($(du -h "${OUT_UPLOADS}" | awk '{print $1}'))"
+  echo "==> Wrote ${OUT_UPLOADS}"
 else
-  echo "==> Uploads directory empty — skipping uploads archive"
+  echo "==> Uploads empty — skip"
 fi
 
-echo "==> Pruning backups older than ${RETENTION_DAYS} days"
 find "${BACKUP_DIR}" -type f \( -name 'hpys_all_*.sql.gz' -o -name 'hpys_uploads_*.tar.gz' \) \
   -mtime "+${RETENTION_DAYS}" -print -delete || true
-
 echo "==> Backup complete"
-ls -lh "${BACKUP_DIR}"/hpys_all_*.sql.gz 2>/dev/null | tail -n 5 || true
-ls -lh "${BACKUP_DIR}"/hpys_uploads_*.tar.gz 2>/dev/null | tail -n 5 || true
