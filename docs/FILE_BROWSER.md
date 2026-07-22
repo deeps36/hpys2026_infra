@@ -27,11 +27,13 @@ Host path (also mounted into the HPYS backend as `/app/uploads`):
 
 ```
 /opt/hpys/uploads/
-├── reels/
+├── reels/      ← app reel videos (NEW uploads; streamed by Express)
 ├── users/
 ├── profile/
 └── temp/
 ```
+
+**Reels:** metadata stays in MySQL (`reels_metadata`); video files for new uploads are on disk under `reels/`. Legacy BLOB rows in shard DBs still play until migrated/deleted.
 
 File Browser root is `/srv` → `/opt/hpys/uploads`. The app cannot browse outside this tree.
 
