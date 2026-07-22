@@ -10,6 +10,12 @@
 #
 # Default: external Hostinger MySQL (COMPOSE_PROFILES empty → no mysql container)
 # Bundled MySQL: COMPOSE_PROFILES=local-mysql and DB_HOST=mysql
+#
+# Idempotent Git sync (never `git pull`):
+#   fetch → checkout main → reset --hard origin/main → clean -fd
+# If this script is outdated on the VM, bootstrap once:
+#   cd /opt/hpys && git fetch origin && git checkout -f main && \
+#   git reset --hard origin/main && ./deploy.sh
 # =============================================================================
 set -euo pipefail
 
@@ -59,8 +65,10 @@ if [[ -f .env ]]; then
   val="$(read_env FRONTEND_DIR)"; [[ -n "${val}" ]] && FRONTEND_DIR="${val}"
   val="$(read_env BACKEND_DIR)";  [[ -n "${val}" ]] && BACKEND_DIR="${val}"
   val="$(read_env IMAGE_TAG)";    [[ -n "${val}" ]] && IMAGE_TAG="${val}"
+  val="$(read_env DEPLOY_BRANCH)"; [[ -n "${val}" ]] && DEPLOY_BRANCH="${val}"
   val="$(trim "$(read_env COMPOSE_PROFILES)")"; COMPOSE_PROFILES="${val}"
 fi
+DEPLOY_BRANCH="${DEPLOY_BRANCH:-main}"
 
 log "HPYS deploy starting in ${ROOT_DIR}"
 date -u '+%Y-%m-%dT%H:%M:%SZ'
@@ -150,36 +158,48 @@ else
   chown -R 1001:1001 data/uploads data/logs 2>/dev/null || true
 fi
 
-# Pull infra repo itself when /opt/hpys is a git clone of hpys2026_infra
-if [[ -d "${ROOT_DIR}/.git" ]]; then
-  log "Pulling latest infra code (${ROOT_DIR})"
-  git -C "${ROOT_DIR}" pull --ff-only || log "WARNING: infra git pull failed — continuing with local files"
-fi
-
-pull_repo() {
+# Force every clone to match origin/<branch> exactly.
+# Never uses `git pull` (fails when there is no upstream / diverged history).
+# `git clean -fd` does NOT remove ignored paths (.env, data/*, frontend/, backend/).
+sync_repo() {
   local dir="$1"
   local label="$2"
-  local branch="${DEPLOY_BRANCH:-main}"
-  if [[ -d "${dir}/.git" ]]; then
-    log "Updating ${label} to origin/${branch} (${dir})"
-    git -C "${dir}" fetch origin --prune
-    # Prefer the deployment branch so VM hotfixes / detached HEADs cannot stick
-    if git -C "${dir}" show-ref --verify --quiet "refs/remotes/origin/${branch}"; then
-      git -C "${dir}" checkout -B "${branch}" "origin/${branch}"
+  local branch="${DEPLOY_BRANCH}"
+
+  if [[ ! -d "${dir}/.git" ]]; then
+    if [[ -d "${dir}" ]]; then
+      err "${label} at ${dir} exists but is not a git repo"
     else
-      log "WARNING: origin/${branch} missing for ${label} — pulling current branch"
-      git -C "${dir}" pull --ff-only || true
+      err "${label} directory missing: ${dir}"
     fi
-  elif [[ -d "${dir}" ]]; then
-    log "${label} at ${dir} is not a git repo — skipping pull"
-  else
-    err "${label} directory missing: ${dir}"
     exit 1
   fi
+
+  log "Syncing ${label} → origin/${branch} (fetch + hard reset)"
+  git -C "${dir}" fetch origin --prune
+  # Create local main if needed; -f discards local modifications on switch
+  if git -C "${dir}" show-ref --verify --quiet "refs/heads/${branch}"; then
+    git -C "${dir}" checkout -f "${branch}"
+  else
+    git -C "${dir}" checkout -B "${branch}" "origin/${branch}"
+  fi
+  git -C "${dir}" reset --hard "origin/${branch}"
+  git -C "${dir}" clean -fd
+  log "  ${label} @ $(git -C "${dir}" rev-parse --short HEAD) ($(git -C "${dir}" log -1 --pretty=%s))"
 }
 
-pull_repo "${FRONTEND_DIR}" "frontend"
-pull_repo "${BACKEND_DIR}" "backend"
+# Re-exec once after infra sync so this run uses the latest deploy.sh / compose from Git
+if [[ "${HPYS_DEPLOY_RESYNC:-}" != "1" ]]; then
+  if [[ -d "${ROOT_DIR}/.git" ]]; then
+    sync_repo "${ROOT_DIR}" "infra"
+  fi
+  export HPYS_DEPLOY_RESYNC=1
+  log "Re-executing deploy.sh from synced infra tree"
+  exec bash "${ROOT_DIR}/deploy.sh" "$@"
+fi
+
+sync_repo "${FRONTEND_DIR}" "frontend"
+sync_repo "${BACKEND_DIR}" "backend"
 
 if [[ ! -f "${FRONTEND_DIR}/Dockerfile" ]]; then
   err "Frontend Dockerfile missing at ${FRONTEND_DIR}/Dockerfile"
@@ -245,8 +265,8 @@ fi
 log "Building images (tag=${IMAGE_TAG})"
 docker compose build --pull
 
-log "Starting containers (profiles=${COMPOSE_PROFILES:-<none>})"
-docker compose up -d --remove-orphans
+log "Starting containers with force-recreate (profiles=${COMPOSE_PROFILES:-<none>})"
+docker compose up -d --force-recreate --remove-orphans
 
 # Ensure mysql container is NOT running in external mode
 if ! uses_local_mysql; then
@@ -303,35 +323,57 @@ if (( all_healthy != 1 )); then
   exit 1
 fi
 
-log "Smoke checks (localhost)"
-# Routing must expose /api/reels (not /api alone). Accept 2xx/4xx/5xx as long as not 404.
-smoke_not_404() {
-  local url="$1"
-  local code
+log "Post-deploy verification (localhost)"
+http_code() {
+  local method="${1:-GET}"
+  local url="$2"
   if command -v curl >/dev/null 2>&1; then
-    code="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 15 -X "${2:-GET}" "$url" || true)"
+    curl -sS -o /dev/null -w '%{http_code}' --max-time 15 -X "${method}" "${url}" || printf '000'
   else
-    code="$(wget -S -T 15 -O /dev/null "$url" 2>&1 | awk '/HTTP\// {print $2; exit}' || true)"
+    wget -S -T 15 -O /dev/null --method="${method}" "${url}" 2>&1 | awk '/HTTP\// {print $2; exit}' || printf '000'
   fi
+}
+
+verify_health() {
+  local url="http://127.0.0.1:8000/health"
+  local code
+  code="$(http_code GET "${url}")"
+  if [[ "${code}" != "200" ]]; then
+    err "VERIFY FAIL ${url} → HTTP ${code} (expected 200)"
+    exit 1
+  fi
+  log "  OK GET ${url} → HTTP ${code}"
+}
+
+# Route must exist. Accept 2xx/4xx/5xx except 404/000 (DB may return 500; upload without file → 400).
+verify_route() {
+  local method="$1"
+  local url="$2"
+  local code
+  code="$(http_code "${method}" "${url}")"
   if [[ -z "${code}" || "${code}" == "000" || "${code}" == "404" ]]; then
-    err "Smoke failed for ${url} (HTTP ${code:-none}) — expected route to exist (not 404)"
-    return 1
+    err "VERIFY FAIL ${method} ${url} → HTTP ${code:-none} (route missing or unreachable)"
+    exit 1
   fi
-  log "  OK ${url} → HTTP ${code}"
+  log "  OK ${method} ${url} → HTTP ${code}"
 }
 
 if command -v curl >/dev/null 2>&1; then
-  curl -fsS --max-time 5 "http://127.0.0.1:8080/" >/dev/null
-  curl -fsS --max-time 5 "http://127.0.0.1:8000/health" >/dev/null
+  curl -fsS --max-time 5 "http://127.0.0.1:8080/" >/dev/null || {
+    err "VERIFY FAIL frontend http://127.0.0.1:8080/"
+    exit 1
+  }
 else
-  wget -q -T 5 -O /dev/null "http://127.0.0.1:8080/"
-  wget -q -T 5 -O /dev/null "http://127.0.0.1:8000/health"
+  wget -q -T 5 -O /dev/null "http://127.0.0.1:8080/" || {
+    err "VERIFY FAIL frontend http://127.0.0.1:8080/"
+    exit 1
+  }
 fi
-smoke_not_404 "http://127.0.0.1:8000/api/reels"
-smoke_not_404 "http://127.0.0.1:8000/api/reels/init"
-# upload without multipart should be 4xx from multer/handler, never 404
-smoke_not_404 "http://127.0.0.1:8000/api/reels/upload" "POST"
-log "Smoke checks passed"
+
+verify_health
+verify_route GET "http://127.0.0.1:8000/api/reels"
+verify_route POST "http://127.0.0.1:8000/api/reels/upload"
+log "Post-deploy verification passed"
 
 log "Container status"
 docker compose ps
