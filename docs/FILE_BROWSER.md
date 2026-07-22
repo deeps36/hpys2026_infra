@@ -49,7 +49,7 @@ Config / state:
 Host Nginx vhost for `files.hpys.in` is in `nginx/hpys-host.conf`:
 
 - HTTPS redirect
-- `client_max_body_size 2048M` (2 GB uploads)
+- `client_max_body_size` from `.env` **`UPLOAD_MAX_SIZE`** (`0` = unlimited; not a fixed 2G)
 - Proxies to `127.0.0.1:8081` (compose binds loopback only)
 
 Install / refresh:

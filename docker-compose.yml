@@ -172,6 +172,10 @@ services:
       AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:-}
 
       LUDOKING_API_KEY: ${LUDOKING_API_KEY:-}
+
+      # 0 / empty = no Multer file-size cap (matches Nginx UPLOAD_MAX_SIZE=0)
+      UPLOAD_MAX_BYTES: ${UPLOAD_MAX_BYTES:-0}
+      JSON_BODY_LIMIT: ${JSON_BODY_LIMIT:-100mb}
     ports:
       - "127.0.0.1:8000:8000"
     volumes:
@@ -193,8 +197,8 @@ services:
       - ALL
     pids_limit: 512
     cpus: 2.0
-    # Headroom for in-memory reel uploads (multer memoryStorage up to 500MB) + Node heap
-    mem_limit: 2048m
+    # Headroom for large in-memory reel uploads + Node heap (raise if you set high UPLOAD_MAX_BYTES)
+    mem_limit: ${BACKEND_MEM_LIMIT:-3072m}
     mem_reservation: 512m
     healthcheck:
       # awa1.1+ exposes GET /health (JSON). Prefer this over "/".

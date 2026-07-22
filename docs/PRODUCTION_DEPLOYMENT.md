@@ -47,7 +47,8 @@ MySQL (Hostinger Remote):
 |-------|-------|
 | Multer (`reelsRoutes.js`) | **500 MB** |
 | Express JSON | 100 MB |
-| Host Nginx `client_max_body_size` | **500 M** |
+| Host Nginx `client_max_body_size` | **`UPLOAD_MAX_SIZE`** from `.env` (`0` = unlimited) |
+| Multer reel upload | **`UPLOAD_MAX_BYTES`** from `.env` (`0` = no Multer cap) |
 | Backend container memory | **2048 m** (in-memory uploads) |
 
 ---

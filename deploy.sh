@@ -152,6 +152,12 @@ FILEBROWSER_PUBLIC_URL="${FILEBROWSER_PUBLIC_URL:-https://files.hpys.in}"
 FILEBROWSER_IMAGE="$(read_env FILEBROWSER_IMAGE)"
 FILEBROWSER_IMAGE="${FILEBROWSER_IMAGE:-filebrowser/filebrowser:v2.31.3}"
 
+# Nginx/Multer upload cap — NOT a fixed 2G. 0 = unlimited (nginx client_max_body_size 0).
+UPLOAD_MAX_SIZE="$(trim "$(read_env UPLOAD_MAX_SIZE)")"
+UPLOAD_MAX_SIZE="${UPLOAD_MAX_SIZE:-0}"
+UPLOAD_MAX_BYTES="$(trim "$(read_env UPLOAD_MAX_BYTES)")"
+UPLOAD_MAX_BYTES="${UPLOAD_MAX_BYTES:-0}"
+
 # Vite URLs must be public HTTP(S) app URLs, not the MySQL hostname
 for vite_key in VITE_API_BASE_URL VITE_BACKEND_URL; do
   v="$(read_env "${vite_key}")"
@@ -232,6 +238,8 @@ if [[ "${HPYS_DEPLOY_RESYNC:-}" != "1" ]]; then
   export FILEBROWSER_PASSWORD="${FILEBROWSER_PASSWORD:-}"
   export FILEBROWSER_PUBLIC_URL="${FILEBROWSER_PUBLIC_URL:-https://files.hpys.in}"
   export FILEBROWSER_IMAGE="${FILEBROWSER_IMAGE:-filebrowser/filebrowser:v2.31.3}"
+  export UPLOAD_MAX_SIZE="${UPLOAD_MAX_SIZE:-0}"
+  export UPLOAD_MAX_BYTES="${UPLOAD_MAX_BYTES:-0}"
   log "Re-executing deploy.sh from synced infra tree"
   exec bash "${ROOT_DIR}/deploy.sh" "$@"
 fi
@@ -263,6 +271,130 @@ if [[ ! -f "${ROOT_DIR}/filebrowser/database.db" ]]; then
   err "filebrowser/database.db missing after init"
   exit 1
 fi
+
+# ---------------------------------------------------------------------------
+# Host Nginx: render UPLOAD_MAX_SIZE into config, nginx -t, validate active sizes
+# ---------------------------------------------------------------------------
+nginx_size_to_bytes() {
+  local raw="${1:-0}"
+  local num unit
+  if [[ "${raw}" == "0" ]]; then
+    printf '0'
+    return 0
+  fi
+  if [[ "${raw}" =~ ^([0-9]+)([kKmMgG]?)$ ]]; then
+    num="${BASH_REMATCH[1]}"
+    unit="${BASH_REMATCH[2]}"
+    case "${unit}" in
+      g|G) printf '%s' "$((num * 1024 * 1024 * 1024))" ;;
+      m|M) printf '%s' "$((num * 1024 * 1024))" ;;
+      k|K) printf '%s' "$((num * 1024))" ;;
+      *) printf '%s' "${num}" ;;
+    esac
+    return 0
+  fi
+  err "Invalid UPLOAD_MAX_SIZE='${raw}' (use 0, 500M, 4G, …)"
+  exit 1
+}
+
+install_and_validate_nginx() {
+  local conf_src="${ROOT_DIR}/nginx/hpys-host.conf"
+  local conf_dst="/etc/nginx/sites-available/hpys"
+  local conf_rendered="/tmp/hpys-host.rendered.conf"
+  local expected="${UPLOAD_MAX_SIZE:-0}"
+  local expected_bytes line size_raw bytes unit num found=0
+
+  expected_bytes="$(nginx_size_to_bytes "${expected}")"
+
+  if [[ ! -f "${conf_src}" ]]; then
+    err "Missing ${conf_src}"
+    exit 1
+  fi
+  if ! command -v nginx >/dev/null 2>&1; then
+    err "nginx is not installed on this host"
+    exit 1
+  fi
+  if grep -q '__UPLOAD_MAX_SIZE__' "${conf_src}"; then
+    :
+  else
+    err "${conf_src} missing __UPLOAD_MAX_SIZE__ placeholder"
+    exit 1
+  fi
+
+  log "Rendering Nginx config with UPLOAD_MAX_SIZE=${expected} (0=unlimited)"
+  sed "s/__UPLOAD_MAX_SIZE__/${expected}/g" "${conf_src}" > "${conf_rendered}"
+  if grep -q '__UPLOAD_MAX_SIZE__' "${conf_rendered}"; then
+    err "Failed to substitute __UPLOAD_MAX_SIZE__"
+    exit 1
+  fi
+
+  log "Installing host Nginx site config → ${conf_dst}"
+  if command -v sudo >/dev/null 2>&1; then
+    sudo cp "${conf_rendered}" "${conf_dst}"
+    sudo ln -sfn "${conf_dst}" /etc/nginx/sites-enabled/hpys
+    log "Running: sudo nginx -t"
+    if ! sudo nginx -t; then
+      err "nginx -t failed — aborting deploy"
+      exit 1
+    fi
+    sudo systemctl reload nginx
+  else
+    cp "${conf_rendered}" "${conf_dst}"
+    ln -sfn "${conf_dst}" /etc/nginx/sites-enabled/hpys
+    log "Running: nginx -t"
+    if ! nginx -t; then
+      err "nginx -t failed — aborting deploy"
+      exit 1
+    fi
+    systemctl reload nginx || true
+  fi
+
+  log "Validating active Nginx client_max_body_size == ${expected}"
+  local dump=""
+  if command -v sudo >/dev/null 2>&1; then
+    dump="$(sudo nginx -T 2>/dev/null || true)"
+  else
+    dump="$(nginx -T 2>/dev/null || true)"
+  fi
+  if [[ -z "${dump}" ]]; then
+    err "nginx -T produced no output"
+    exit 1
+  fi
+
+  echo "${dump}" | grep -n 'client_max_body_size' || true
+
+  while IFS= read -r line; do
+    [[ "${line}" =~ client_max_body_size[[:space:]]+([0-9]+)([kKmMgG]?) ]] || continue
+    found=1
+    num="${BASH_REMATCH[1]}"
+    unit="${BASH_REMATCH[2]}"
+    size_raw="${num}${unit}"
+    bytes="$(nginx_size_to_bytes "${size_raw}")"
+    if [[ "${expected}" == "0" ]]; then
+      if [[ "${size_raw}" != "0" && "${bytes}" != "0" ]]; then
+        # allow literal 0 only when expecting unlimited
+        if [[ "${num}" != "0" ]]; then
+          err "Expected unlimited (0) but found client_max_body_size ${size_raw}"
+          exit 1
+        fi
+      fi
+    else
+      if (( bytes != expected_bytes )); then
+        err "Nginx client_max_body_size ${size_raw} != configured UPLOAD_MAX_SIZE=${expected}"
+        exit 1
+      fi
+    fi
+    log "  OK client_max_body_size ${size_raw}"
+  done < <(echo "${dump}" | grep 'client_max_body_size' || true)
+
+  if (( found == 0 )); then
+    err "No client_max_body_size directives found in nginx -T output"
+    exit 1
+  fi
+  log "Nginx upload limits validated (UPLOAD_MAX_SIZE=${expected})"
+}
+
+install_and_validate_nginx
 
 # Preflight: TCP reachability to external MySQL (Hostinger must allow Oracle egress IP)
 if ! uses_local_mysql; then
@@ -435,6 +567,56 @@ fi
 verify_health
 verify_route GET "http://127.0.0.1:8000/api/reels"
 verify_route POST "http://127.0.0.1:8000/api/reels/upload"
+
+# --- Nginx must not 413 when Content-Length is within UPLOAD_MAX_SIZE ---
+log "Nginx upload-size smoke (must not return 413 for allowed sizes)"
+verify_not_413() {
+  local url="$1"
+  local content_length="$2"
+  local code
+  code="$(curl -sS -o /tmp/hpys_413_body.txt -w '%{http_code}' --max-time 30 \
+    -X POST "${url}" \
+    -H 'Content-Type: multipart/form-data; boundary=hpyssmoke' \
+    -H "Content-Length: ${content_length}" \
+    --data-binary '' || printf '000')"
+  if [[ "${code}" == "413" ]]; then
+    err "VERIFY FAIL ${url} → HTTP 413 (Nginx rejecting upload; check UPLOAD_MAX_SIZE=${UPLOAD_MAX_SIZE:-0})"
+    exit 1
+  fi
+  if [[ "${code}" == "000" ]]; then
+    err "VERIFY FAIL ${url} → unreachable"
+    exit 1
+  fi
+  log "  OK POST ${url} → HTTP ${code} (not 413; CL=${content_length})"
+}
+
+# Probe ~572MB when unlimited or limit > 572MB; otherwise skip large probe
+UPLOAD_MAX_BYTES_EFFECTIVE="$(nginx_size_to_bytes "${UPLOAD_MAX_SIZE:-0}")"
+PROBE_CL=600000000
+if [[ "${UPLOAD_MAX_SIZE:-0}" == "0" ]] || (( UPLOAD_MAX_BYTES_EFFECTIVE == 0 )) || (( UPLOAD_MAX_BYTES_EFFECTIVE > PROBE_CL )); then
+  verify_not_413 "https://hpys.in/api/reels/upload" "${PROBE_CL}"
+  verify_not_413 "https://api26.hpys.in/api/reels/upload" "${PROBE_CL}"
+  verify_not_413 "https://www.hpys.in/api/reels/upload" "${PROBE_CL}"
+else
+  log "  Skipping large CL probe (UPLOAD_MAX_SIZE=${UPLOAD_MAX_SIZE} ≤ ${PROBE_CL})"
+fi
+
+# Small real multipart through Nginx (proves path works end-to-end, not 413)
+printf 'hpys-reels-upload-smoke\n' > /tmp/hpys_reels_smoke.bin
+small_code="$(curl -sS -o /tmp/hpys_reels_smoke_resp.txt -w '%{http_code}' --max-time 60 \
+  -X POST "https://hpys.in/api/reels/upload" \
+  -F "video=@/tmp/hpys_reels_smoke.bin;type=video/mp4" \
+  -F "user_id=1" \
+  -F "username=smoke" || printf '000')"
+if [[ "${small_code}" == "413" ]]; then
+  err "VERIFY FAIL multipart https://hpys.in/api/reels/upload → HTTP 413"
+  exit 1
+fi
+if [[ "${small_code}" == "000" ]]; then
+  err "VERIFY FAIL multipart upload unreachable"
+  exit 1
+fi
+log "  OK multipart https://hpys.in/api/reels/upload → HTTP ${small_code} (not 413)"
 
 # --- File Browser smoke tests (login + mkdir + upload + delete) ---
 log "File Browser smoke tests"
