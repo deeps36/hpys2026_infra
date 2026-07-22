@@ -1,0 +1,25 @@
+# Secrets / local env
+.env
+env.production
+*.pem
+*.key
+
+# Nested application checkouts (separate git repos)
+hpys2026_frontend/
+hpys2026_backend/
+frontend/
+backend/
+
+# SQL dumps / local data
+*.sql
+data/mysql/**
+!data/mysql/.gitkeep
+data/uploads/**
+!data/uploads/.gitkeep
+data/backups/**
+!data/backups/.gitkeep
+data/logs/**
+!data/logs/.gitkeep
+
+*.log
+.DS_Store

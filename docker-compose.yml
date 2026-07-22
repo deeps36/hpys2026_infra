@@ -1,0 +1,264 @@
+# =============================================================================
+# HPYS 2026 — Production Docker Compose (Oracle Cloud ARM64 / Ubuntu 24.04)
+# Docker Compose (non-Swarm). Uses cpus/mem_limit — NOT Swarm deploy.resources.
+#
+# Bundled MySQL (default backward-compatible host "mysql"):
+#   COMPOSE_PROFILES=local-mysql docker compose up -d
+#   # or: docker compose --profile local-mysql up -d
+#
+# External MySQL (Hostinger / managed DB / remote):
+#   Set DB_HOST (and related *_HOST) in .env to the remote MySQL hostname/IP
+#   Leave COMPOSE_PROFILES unset and run: docker compose up -d
+#   (mysql service will not start; backend has no hard depends_on)
+# =============================================================================
+
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "20m"
+    max-file: "5"
+
+services:
+  frontend:
+    build:
+      context: ${FRONTEND_DIR:-./frontend}
+      dockerfile: Dockerfile
+      args:
+        VITE_API_BASE_URL: ${VITE_API_BASE_URL:?VITE_API_BASE_URL is required}
+        VITE_BACKEND_URL: ${VITE_BACKEND_URL:?VITE_BACKEND_URL is required}
+    image: hpys-frontend:${IMAGE_TAG:-latest}
+    pull_policy: build
+    platform: linux/arm64
+    container_name: hpys-frontend
+    restart: unless-stopped
+    init: true
+    stop_grace_period: 10s
+    ports:
+      - "127.0.0.1:8080:80"
+    networks:
+      - frontend-network
+    logging: *default-logging
+    security_opt:
+      - no-new-privileges:true
+    read_only: true
+    tmpfs:
+      - /tmp:size=32m,mode=1777
+      - /var/cache/nginx:size=64m,mode=1777
+      - /var/run:size=16m,mode=1777
+      - /var/log/nginx:size=16m,mode=1777
+    cap_drop:
+      - ALL
+    cap_add:
+      - CHOWN
+      - SETGID
+      - SETUID
+      - NET_BIND_SERVICE
+      - DAC_OVERRIDE
+    pids_limit: 256
+    cpus: 1.0
+    mem_limit: 256m
+    mem_reservation: 64m
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -T 3 -O /dev/null http://127.0.0.1/ || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+
+  backend:
+    build:
+      context: ${BACKEND_DIR:-./backend}
+      dockerfile: Dockerfile
+    image: hpys-backend:${IMAGE_TAG:-latest}
+    pull_policy: build
+    platform: linux/arm64
+    container_name: hpys-backend
+    restart: unless-stopped
+    init: true
+    stop_grace_period: 25s
+    environment:
+      NODE_ENV: production
+      PORT: ${PORT:-8000}
+
+      # All DB hosts/ports come from .env — default "mysql" keeps local Compose networking working
+      DB_HOST: ${DB_HOST:-mysql}
+      DB_PORT: ${DB_PORT:-3306}
+      DB_DATABASE: ${DB_DATABASE:-hpys_db}
+      DB_USERNAME: ${DB_USERNAME:-hpys}
+      DB_PASSWORD: ${DB_PASSWORD:?DB_PASSWORD is required}
+
+      LOCAL_DB_HOST: ${LOCAL_DB_HOST:-${DB_HOST:-mysql}}
+      LOCAL_DB_PORT: ${LOCAL_DB_PORT:-${DB_PORT:-3306}}
+      LOCAL_DB_DATABASE: ${LOCAL_DB_DATABASE:-${DB_DATABASE:-hpys_db}}
+      LOCAL_DB_USERNAME: ${LOCAL_DB_USERNAME:-${DB_USERNAME:-hpys}}
+      LOCAL_DB_PASSWORD: ${LOCAL_DB_PASSWORD:-${DB_PASSWORD:?DB_PASSWORD is required}}
+
+      PROD_DB_HOST: ${PROD_DB_HOST:-${DB_HOST:-mysql}}
+      PROD_DB_PORT: ${PROD_DB_PORT:-${DB_PORT:-3306}}
+      PROD_DB_DATABASE: ${PROD_DB_DATABASE:-${DB_DATABASE:-hpys_db}}
+      PROD_DB_USERNAME: ${PROD_DB_USERNAME:-${DB_USERNAME:-hpys}}
+      PROD_DB_PASSWORD: ${PROD_DB_PASSWORD:-${DB_PASSWORD:?DB_PASSWORD is required}}
+
+      REELS_DB_COUNT: ${REELS_DB_COUNT:-6}
+      REELS_DB_LIMIT_BYTES: ${REELS_DB_LIMIT_BYTES:-3221225472}
+
+      REELS_METADATA_DB_HOST: ${REELS_METADATA_DB_HOST:-${DB_HOST:-mysql}}
+      REELS_METADATA_DB_PORT: ${REELS_METADATA_DB_PORT:-${DB_PORT:-3306}}
+      REELS_METADATA_DB_NAME: ${REELS_METADATA_DB_NAME:-hpys_reels_metadata}
+      REELS_METADATA_DB_USER: ${REELS_METADATA_DB_USER:-${DB_USERNAME:-hpys}}
+      REELS_METADATA_DB_PASSWORD: ${REELS_METADATA_DB_PASSWORD:-${DB_PASSWORD:?DB_PASSWORD is required}}
+
+      REELS_DB_1_HOST: ${REELS_DB_1_HOST:-${DB_HOST:-mysql}}
+      REELS_DB_1_PORT: ${REELS_DB_1_PORT:-${DB_PORT:-3306}}
+      REELS_DB_1_USER: ${REELS_DB_1_USER:-${DB_USERNAME:-hpys}}
+      REELS_DB_1_PASSWORD: ${REELS_DB_1_PASSWORD:-${DB_PASSWORD:?DB_PASSWORD is required}}
+      REELS_DB_1_NAME: ${REELS_DB_1_NAME:-hpys_reels_db_1}
+
+      REELS_DB_2_HOST: ${REELS_DB_2_HOST:-${DB_HOST:-mysql}}
+      REELS_DB_2_PORT: ${REELS_DB_2_PORT:-${DB_PORT:-3306}}
+      REELS_DB_2_USER: ${REELS_DB_2_USER:-${DB_USERNAME:-hpys}}
+      REELS_DB_2_PASSWORD: ${REELS_DB_2_PASSWORD:-${DB_PASSWORD:?DB_PASSWORD is required}}
+      REELS_DB_2_NAME: ${REELS_DB_2_NAME:-hpys_reels_db_2}
+
+      REELS_DB_3_HOST: ${REELS_DB_3_HOST:-${DB_HOST:-mysql}}
+      REELS_DB_3_PORT: ${REELS_DB_3_PORT:-${DB_PORT:-3306}}
+      REELS_DB_3_USER: ${REELS_DB_3_USER:-${DB_USERNAME:-hpys}}
+      REELS_DB_3_PASSWORD: ${REELS_DB_3_PASSWORD:-${DB_PASSWORD:?DB_PASSWORD is required}}
+      REELS_DB_3_NAME: ${REELS_DB_3_NAME:-hpys_reels_db_3}
+
+      REELS_DB_4_HOST: ${REELS_DB_4_HOST:-${DB_HOST:-mysql}}
+      REELS_DB_4_PORT: ${REELS_DB_4_PORT:-${DB_PORT:-3306}}
+      REELS_DB_4_USER: ${REELS_DB_4_USER:-${DB_USERNAME:-hpys}}
+      REELS_DB_4_PASSWORD: ${REELS_DB_4_PASSWORD:-${DB_PASSWORD:?DB_PASSWORD is required}}
+      REELS_DB_4_NAME: ${REELS_DB_4_NAME:-hpys_reels_db_4}
+
+      REELS_DB_5_HOST: ${REELS_DB_5_HOST:-${DB_HOST:-mysql}}
+      REELS_DB_5_PORT: ${REELS_DB_5_PORT:-${DB_PORT:-3306}}
+      REELS_DB_5_USER: ${REELS_DB_5_USER:-${DB_USERNAME:-hpys}}
+      REELS_DB_5_PASSWORD: ${REELS_DB_5_PASSWORD:-${DB_PASSWORD:?DB_PASSWORD is required}}
+      REELS_DB_5_NAME: ${REELS_DB_5_NAME:-hpys_reels_db_5}
+
+      REELS_DB_6_HOST: ${REELS_DB_6_HOST:-${DB_HOST:-mysql}}
+      REELS_DB_6_PORT: ${REELS_DB_6_PORT:-${DB_PORT:-3306}}
+      REELS_DB_6_USER: ${REELS_DB_6_USER:-${DB_USERNAME:-hpys}}
+      REELS_DB_6_PASSWORD: ${REELS_DB_6_PASSWORD:-${DB_PASSWORD:?DB_PASSWORD is required}}
+      REELS_DB_6_NAME: ${REELS_DB_6_NAME:-hpys_reels_db_6}
+
+      PROFILE_DB_HOST: ${PROFILE_DB_HOST:-${DB_HOST:-mysql}}
+      PROFILE_DB_PORT: ${PROFILE_DB_PORT:-${DB_PORT:-3306}}
+      PROFILE_DB_NAME: ${PROFILE_DB_NAME:-hpys_profile_img}
+      PROFILE_DB_USER: ${PROFILE_DB_USER:-${DB_USERNAME:-hpys}}
+      PROFILE_DB_PASSWORD: ${PROFILE_DB_PASSWORD:-${DB_PASSWORD:?DB_PASSWORD is required}}
+      PROFILE_DB_LIMIT_BYTES: ${PROFILE_DB_LIMIT_BYTES:-3221225472}
+
+      SMTP_HOST: ${SMTP_HOST:-}
+      SMTP_PORT: ${SMTP_PORT:-587}
+      SMTP_USERNAME: ${SMTP_USERNAME:-}
+      SMTP_PASSWORD: ${SMTP_PASSWORD:-}
+      SMTP_FROM_EMAIL: ${SMTP_FROM_EMAIL:-}
+      SMTP_FROM_NAME: ${SMTP_FROM_NAME:-HPYS Verification}
+
+      WHATSAPP_ACCESS_TOKEN: ${WHATSAPP_ACCESS_TOKEN:-}
+      WHATSAPP_PHONE_NUMBER_ID: ${WHATSAPP_PHONE_NUMBER_ID:-}
+      WHATSAPP_BUSINESS_ACCOUNT_ID: ${WHATSAPP_BUSINESS_ACCOUNT_ID:-}
+      WHATSAPP_VERIFY_TOKEN: ${WHATSAPP_VERIFY_TOKEN:-}
+
+      # Optional S3 media uploads (awa1.1+). If unset, local ./data/uploads fallback is used.
+      AWS_REGION: ${AWS_REGION:-}
+      AWS_S3_BUCKET_NAME: ${AWS_S3_BUCKET_NAME:-}
+      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:-}
+      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:-}
+
+      LUDOKING_API_KEY: ${LUDOKING_API_KEY:-}
+    ports:
+      - "127.0.0.1:8000:8000"
+    volumes:
+      - ./data/uploads:/app/uploads
+      - ./data/logs:/app/logs
+    networks:
+      - frontend-network
+      - backend-network
+    # No hard depends_on mysql — allows external MySQL.
+    # When using the local mysql profile, start MySQL first or rely on backend restart/retries.
+    logging: *default-logging
+    security_opt:
+      - no-new-privileges:true
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m,mode=1777
+    cap_drop:
+      - ALL
+    pids_limit: 512
+    cpus: 2.0
+    mem_limit: 1536m
+    mem_reservation: 512m
+    healthcheck:
+      # awa1.1+ exposes GET /health (JSON). Prefer this over "/".
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "const t=setTimeout(()=>process.exit(1),4000);require('http').get('http://127.0.0.1:8000/health',(r)=>{clearTimeout(t);r.resume();process.exit(r.statusCode===200?0:1)}).on('error',()=>{clearTimeout(t);process.exit(1)})",
+        ]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 60s
+
+  mysql:
+    # Opt-in only — do not start when using an external database
+    profiles:
+      - local-mysql
+    image: mysql:8.0.43
+    pull_policy: missing
+    platform: linux/arm64
+    container_name: hpys-mysql
+    restart: unless-stopped
+    init: true
+    stop_grace_period: 60s
+    environment:
+      # Required when profile local-mysql is enabled (not fail-closed so external-DB deploys can parse compose)
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-}
+      MYSQL_DATABASE: ${DB_DATABASE:-hpys_db}
+      MYSQL_USER: ${DB_USERNAME:-hpys}
+      MYSQL_PASSWORD: ${DB_PASSWORD:?DB_PASSWORD is required}
+    command:
+      - --max_allowed_packet=512M
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_unicode_ci
+      - --innodb-buffer-pool-size=${MYSQL_INNODB_BUFFER_POOL:-512M}
+      - --disable-log-bin
+    volumes:
+      - ./data/mysql:/var/lib/mysql
+      - ./mysql/init-databases.sh:/docker-entrypoint-initdb.d/01-init-databases.sh:ro
+      - ./data/backups:/backups:ro
+    networks:
+      - backend-network
+    expose:
+      - "3306"
+    logging: *default-logging
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 1024
+    cpus: 2.0
+    mem_limit: 2g
+    mem_reservation: 512m
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "mysqladmin ping -h 127.0.0.1 -uroot -p\"$$MYSQL_ROOT_PASSWORD\" --silent || exit 1",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 60s
+
+networks:
+  frontend-network:
+    name: hpys-frontend-network
+    driver: bridge
+  backend-network:
+    name: hpys-backend-network
+    driver: bridge
