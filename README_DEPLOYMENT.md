@@ -247,9 +247,16 @@ server {
     ssl_certificate     /etc/ssl/hpys/origin.pem;
     ssl_certificate_key /etc/ssl/hpys/origin.key;
 
-    client_max_body_size 100M;
+    # Must be >= multer limit (500MB) in backend reelsRoutes.js
+    client_max_body_size 500M;
     proxy_read_timeout 300s;
     proxy_send_timeout 300s;
+
+    location = /health {
+        proxy_pass http://127.0.0.1:8000/health;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+    }
 
     location /api/ {
         proxy_pass http://127.0.0.1:8000;
@@ -259,6 +266,7 @@ server {
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto $scheme;
         proxy_request_buffering off;
+        client_max_body_size 500M;
     }
 
     location /uploads/ {

@@ -296,6 +296,22 @@ if (( all_healthy != 1 )); then
 fi
 
 log "Smoke checks (localhost)"
+# Routing must expose /api/reels (not /api alone). Accept 2xx/4xx/5xx as long as not 404.
+smoke_not_404() {
+  local url="$1"
+  local code
+  if command -v curl >/dev/null 2>&1; then
+    code="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 15 -X "${2:-GET}" "$url" || true)"
+  else
+    code="$(wget -S -T 15 -O /dev/null "$url" 2>&1 | awk '/HTTP\// {print $2; exit}' || true)"
+  fi
+  if [[ -z "${code}" || "${code}" == "000" || "${code}" == "404" ]]; then
+    err "Smoke failed for ${url} (HTTP ${code:-none}) — expected route to exist (not 404)"
+    return 1
+  fi
+  log "  OK ${url} → HTTP ${code}"
+}
+
 if command -v curl >/dev/null 2>&1; then
   curl -fsS --max-time 5 "http://127.0.0.1:8080/" >/dev/null
   curl -fsS --max-time 5 "http://127.0.0.1:8000/health" >/dev/null
@@ -303,6 +319,10 @@ else
   wget -q -T 5 -O /dev/null "http://127.0.0.1:8080/"
   wget -q -T 5 -O /dev/null "http://127.0.0.1:8000/health"
 fi
+smoke_not_404 "http://127.0.0.1:8000/api/reels"
+smoke_not_404 "http://127.0.0.1:8000/api/reels/init"
+# upload without multipart should be 4xx from multer/handler, never 404
+smoke_not_404 "http://127.0.0.1:8000/api/reels/upload" "POST"
 log "Smoke checks passed"
 
 log "Container status"
