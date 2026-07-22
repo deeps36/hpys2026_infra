@@ -151,6 +151,11 @@ FILEBROWSER_PUBLIC_URL="$(read_env FILEBROWSER_PUBLIC_URL)"
 FILEBROWSER_PUBLIC_URL="${FILEBROWSER_PUBLIC_URL:-https://files.hpys.in}"
 FILEBROWSER_IMAGE="$(read_env FILEBROWSER_IMAGE)"
 FILEBROWSER_IMAGE="${FILEBROWSER_IMAGE:-filebrowser/filebrowser:v2.32.0}"
+# Guard against previously documented invalid tag
+if [[ "${FILEBROWSER_IMAGE}" == *"v2.31.3"* ]]; then
+  log "Replacing invalid FILEBROWSER_IMAGE tag v2.31.3 → v2.32.0"
+  FILEBROWSER_IMAGE="filebrowser/filebrowser:v2.32.0"
+fi
 
 # Nginx/Multer upload cap (default 20G). Set UPLOAD_MAX_SIZE=0 for unlimited.
 UPLOAD_MAX_SIZE="$(trim "$(read_env UPLOAD_MAX_SIZE)")"
