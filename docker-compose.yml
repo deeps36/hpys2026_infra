@@ -89,6 +89,13 @@ services:
       DB_USERNAME: ${DB_USERNAME:-hpys}
       DB_PASSWORD: ${DB_PASSWORD:?DB_PASSWORD is required}
 
+      # Hostinger max_connections_per_hour: keep limits low and idle sockets warm
+      DB_CONNECTION_LIMIT: ${DB_CONNECTION_LIMIT:-3}
+      DB_POOL_MAX_IDLE: ${DB_POOL_MAX_IDLE:-3}
+      DB_POOL_IDLE_TIMEOUT_MS: ${DB_POOL_IDLE_TIMEOUT_MS:-28800000}
+      DB_POOL_QUEUE_LIMIT: ${DB_POOL_QUEUE_LIMIT:-100}
+      DB_CONNECT_TIMEOUT_MS: ${DB_CONNECT_TIMEOUT_MS:-15000}
+
       LOCAL_DB_HOST: ${LOCAL_DB_HOST:-${DB_HOST:-mysql}}
       LOCAL_DB_PORT: ${LOCAL_DB_PORT:-${DB_PORT:-3306}}
       LOCAL_DB_DATABASE: ${LOCAL_DB_DATABASE:-${DB_DATABASE:-hpys_db}}
