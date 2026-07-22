@@ -21,5 +21,21 @@ data/backups/**
 data/logs/**
 !data/logs/.gitkeep
 
+# Shared uploads + File Browser state
+uploads/**
+!uploads/.gitkeep
+!uploads/reels/
+!uploads/reels/.gitkeep
+!uploads/users/
+!uploads/users/.gitkeep
+!uploads/profile/
+!uploads/profile/.gitkeep
+!uploads/temp/
+!uploads/temp/.gitkeep
+filebrowser/database.db
+filebrowser/*.db-journal
+filebrowser/*.db-wal
+filebrowser/*.db-shm
+
 *.log
 .DS_Store

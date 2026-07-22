@@ -175,7 +175,8 @@ services:
     ports:
       - "127.0.0.1:8000:8000"
     volumes:
-      - ./data/uploads:/app/uploads
+      # Shared media tree with File Browser (/opt/hpys/uploads on the server)
+      - ./uploads:/app/uploads
       - ./data/logs:/app/logs
     networks:
       - frontend-network
@@ -208,6 +209,58 @@ services:
       timeout: 5s
       retries: 3
       start_period: 60s
+
+  filebrowser:
+    image: ${FILEBROWSER_IMAGE:-filebrowser/filebrowser:v2.31.3}
+    pull_policy: missing
+    platform: linux/arm64
+    container_name: hpys-filebrowser
+    restart: unless-stopped
+    init: true
+    stop_grace_period: 15s
+    user: "1001:33"
+    # Loopback only — host Nginx terminates TLS for files.hpys.in (not public 0.0.0.0)
+    ports:
+      - "127.0.0.1:8081:80"
+    expose:
+      - "80"
+    volumes:
+      - ./uploads:/srv
+      - ./filebrowser/database.db:/database.db
+      - ./filebrowser/settings.json:/.config/settings.json:ro
+      - ./filebrowser/branding.json:/.config/branding.json:ro
+    command:
+      - --address=0.0.0.0
+      - --port=80
+      - --database=/database.db
+      - --root=/srv
+      - --config=/.config/settings.json
+    networks:
+      - frontend-network
+    logging: *default-logging
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    cap_add:
+      - CHOWN
+      - SETGID
+      - SETUID
+      - DAC_OVERRIDE
+    pids_limit: 256
+    cpus: 1.0
+    mem_limit: 512m
+    mem_reservation: 128m
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "wget -q -T 3 -O /dev/null http://127.0.0.1:80/ || exit 1",
+        ]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
 
   mysql:
     # Opt-in only — do not start when using an external database

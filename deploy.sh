@@ -137,12 +137,20 @@ else
   log "External MySQL mode (COMPOSE_PROFILES empty). DB_HOST=${DB_HOST_VAL}:${DB_PORT_VAL}"
 fi
 
-for required in VITE_API_BASE_URL VITE_BACKEND_URL DB_PASSWORD DB_DATABASE DB_USERNAME; do
+for required in VITE_API_BASE_URL VITE_BACKEND_URL DB_PASSWORD DB_DATABASE DB_USERNAME FILEBROWSER_PASSWORD; do
   if [[ -z "$(read_env "${required}")" ]]; then
     err "Missing required .env value: ${required}"
     exit 1
   fi
 done
+
+FILEBROWSER_USERNAME="$(read_env FILEBROWSER_USERNAME)"
+FILEBROWSER_USERNAME="${FILEBROWSER_USERNAME:-admin}"
+FILEBROWSER_PASSWORD="$(read_env FILEBROWSER_PASSWORD)"
+FILEBROWSER_PUBLIC_URL="$(read_env FILEBROWSER_PUBLIC_URL)"
+FILEBROWSER_PUBLIC_URL="${FILEBROWSER_PUBLIC_URL:-https://files.hpys.in}"
+FILEBROWSER_IMAGE="$(read_env FILEBROWSER_IMAGE)"
+FILEBROWSER_IMAGE="${FILEBROWSER_IMAGE:-filebrowser/filebrowser:v2.31.3}"
 
 # Vite URLs must be public HTTP(S) app URLs, not the MySQL hostname
 for vite_key in VITE_API_BASE_URL VITE_BACKEND_URL; do
@@ -155,16 +163,29 @@ done
 
 chmod 600 .env || true
 mkdir -p data/uploads data/backups data/logs
+mkdir -p uploads/reels uploads/users uploads/profile uploads/temp
+mkdir -p filebrowser
+
+# One-time migrate legacy ./data/uploads → ./uploads (shared with File Browser)
+if [[ -d data/uploads ]] && [[ -z "$(ls -A uploads/reels 2>/dev/null || true)" ]]; then
+  if [[ -n "$(ls -A data/uploads 2>/dev/null || true)" ]]; then
+    log "Migrating data/uploads → uploads/"
+    cp -a data/uploads/. uploads/ 2>/dev/null || true
+  fi
+fi
+
 if uses_local_mysql; then
   mkdir -p data/mysql mysql
 fi
 
 if command -v sudo >/dev/null 2>&1; then
-  sudo chown -R 1001:1001 data/uploads data/logs 2>/dev/null \
-    || chown -R 1001:1001 data/uploads data/logs 2>/dev/null \
+  sudo chown -R 1001:33 uploads data/logs 2>/dev/null \
+    || chown -R 1001:33 uploads data/logs 2>/dev/null \
     || true
+  sudo chmod -R ug+rwX uploads 2>/dev/null || chmod -R ug+rwX uploads 2>/dev/null || true
 else
-  chown -R 1001:1001 data/uploads data/logs 2>/dev/null || true
+  chown -R 1001:33 uploads data/logs 2>/dev/null || true
+  chmod -R ug+rwX uploads 2>/dev/null || true
 fi
 
 # Force every clone to match origin/<branch> exactly.
@@ -207,6 +228,10 @@ if [[ "${HPYS_DEPLOY_RESYNC:-}" != "1" ]]; then
   export COMPOSE_PROFILES="${COMPOSE_PROFILES:-}"
   export DEPLOY_BRANCH="${DEPLOY_BRANCH:-main}"
   export IMAGE_TAG="${IMAGE_TAG:-latest}"
+  export FILEBROWSER_USERNAME="${FILEBROWSER_USERNAME:-admin}"
+  export FILEBROWSER_PASSWORD="${FILEBROWSER_PASSWORD:-}"
+  export FILEBROWSER_PUBLIC_URL="${FILEBROWSER_PUBLIC_URL:-https://files.hpys.in}"
+  export FILEBROWSER_IMAGE="${FILEBROWSER_IMAGE:-filebrowser/filebrowser:v2.31.3}"
   log "Re-executing deploy.sh from synced infra tree"
   exec bash "${ROOT_DIR}/deploy.sh" "$@"
 fi
@@ -220,6 +245,22 @@ if [[ ! -f "${FRONTEND_DIR}/Dockerfile" ]]; then
 fi
 if [[ ! -f "${BACKEND_DIR}/Dockerfile" ]]; then
   err "Backend Dockerfile missing at ${BACKEND_DIR}/Dockerfile"
+  exit 1
+fi
+
+# Pull File Browser image + init DB/admin before starting the service
+log "Preparing File Browser (/opt/hpys/uploads + /opt/hpys/filebrowser)"
+export FILEBROWSER_USERNAME FILEBROWSER_PASSWORD FILEBROWSER_IMAGE
+docker pull "${FILEBROWSER_IMAGE}" || true
+bash "${ROOT_DIR}/scripts/init-filebrowser.sh"
+
+# Ensure database.db is a file (Docker creates a directory if the bind source is missing)
+if [[ -d "${ROOT_DIR}/filebrowser/database.db" ]]; then
+  err "filebrowser/database.db is a directory — remove it and re-run deploy"
+  exit 1
+fi
+if [[ ! -f "${ROOT_DIR}/filebrowser/database.db" ]]; then
+  err "filebrowser/database.db missing after init"
   exit 1
 fi
 
@@ -293,9 +334,9 @@ if ! uses_local_mysql; then
   fi
 fi
 
-WAIT_SERVICES=(backend frontend)
+WAIT_SERVICES=(backend frontend filebrowser)
 if uses_local_mysql; then
-  WAIT_SERVICES=(mysql backend frontend)
+  WAIT_SERVICES=(mysql backend frontend filebrowser)
 fi
 
 log "Waiting for services to become healthy: ${WAIT_SERVICES[*]} (timeout ${HEALTH_TIMEOUT_SEC:-180}s)"
@@ -315,7 +356,12 @@ while (( SECONDS < deadline )); do
       break
     fi
     status="$(docker inspect --format='{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' "${cid}" 2>/dev/null || echo missing)"
-    if [[ "${status}" != "healthy" ]]; then
+    # "none" = no HEALTHCHECK defined but container is running (acceptable)
+    if [[ "${status}" == "unhealthy" || "${status}" == "starting" ]]; then
+      all_healthy=0
+      break
+    fi
+    if [[ "${status}" != "healthy" && "${status}" != "none" ]]; then
       all_healthy=0
       break
     fi
@@ -389,6 +435,87 @@ fi
 verify_health
 verify_route GET "http://127.0.0.1:8000/api/reels"
 verify_route POST "http://127.0.0.1:8000/api/reels/upload"
+
+# --- File Browser smoke tests (login + mkdir + upload + delete) ---
+log "File Browser smoke tests"
+FB_CODE="$(http_code GET "http://127.0.0.1:8081/")"
+if [[ "${FB_CODE}" != "200" ]]; then
+  err "VERIFY FAIL File Browser GET http://127.0.0.1:8081/ → HTTP ${FB_CODE} (expected 200)"
+  exit 1
+fi
+log "  OK GET http://127.0.0.1:8081/ → HTTP ${FB_CODE}"
+
+PUBLIC_CODE="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 20 -L "${FILEBROWSER_PUBLIC_URL}/" || printf '000')"
+if [[ "${PUBLIC_CODE}" != "200" ]]; then
+  err "VERIFY FAIL ${FILEBROWSER_PUBLIC_URL}/ → HTTP ${PUBLIC_CODE} (expected 200). Check DNS + Nginx for files.hpys.in."
+  exit 1
+fi
+log "  OK GET ${FILEBROWSER_PUBLIC_URL}/ → HTTP ${PUBLIC_CODE}"
+
+if ! command -v curl >/dev/null 2>&1; then
+  err "curl is required for File Browser API smoke tests"
+  exit 1
+fi
+
+FB_TOKEN="$(curl -sS --max-time 20 -X POST "http://127.0.0.1:8081/api/login" \
+  -H 'Content-Type: application/json' \
+  -d "{\"username\":\"${FILEBROWSER_USERNAME}\",\"password\":\"${FILEBROWSER_PASSWORD}\"}" || true)"
+if [[ -z "${FB_TOKEN}" || "${FB_TOKEN}" == *"error"* || "${FB_TOKEN}" == *"Wrong"* ]]; then
+  err "VERIFY FAIL File Browser login (check FILEBROWSER_USERNAME / FILEBROWSER_PASSWORD)"
+  exit 1
+fi
+log "  OK File Browser login"
+
+SMOKE_NAME="hpys_smoke_$(date +%s)"
+SMOKE_DIR="temp/${SMOKE_NAME}"
+
+# Create folder under /temp
+mkdir_code="$(curl -sS -o /tmp/fb_mkdir.json -w '%{http_code}' --max-time 20 \
+  -X POST "http://127.0.0.1:8081/api/resources/%2Ftemp%2F${SMOKE_NAME}/" \
+  -H "X-Auth: ${FB_TOKEN}" || printf '000')"
+if [[ "${mkdir_code}" != "200" && "${mkdir_code}" != "201" ]]; then
+  # Alternate API shape without trailing slash
+  mkdir_code="$(curl -sS -o /tmp/fb_mkdir.json -w '%{http_code}' --max-time 20 \
+    -X POST "http://127.0.0.1:8081/api/resources/temp/${SMOKE_NAME}/?override=false" \
+    -H "X-Auth: ${FB_TOKEN}" || printf '000')"
+fi
+if [[ "${mkdir_code}" != "200" && "${mkdir_code}" != "201" ]]; then
+  err "VERIFY FAIL File Browser create folder (HTTP ${mkdir_code})"
+  cat /tmp/fb_mkdir.json 2>/dev/null || true
+  exit 1
+fi
+log "  OK create folder /${SMOKE_DIR} → HTTP ${mkdir_code}"
+
+printf 'hpys-filebrowser-smoke\n' > /tmp/hpys_fb_smoke.txt
+upload_code="$(curl -sS -o /tmp/fb_upload.json -w '%{http_code}' --max-time 60 \
+  -X POST "http://127.0.0.1:8081/api/resources/temp/${SMOKE_NAME}/smoke.txt?override=true" \
+  -H "X-Auth: ${FB_TOKEN}" \
+  --data-binary @/tmp/hpys_fb_smoke.txt || printf '000')"
+if [[ "${upload_code}" != "200" && "${upload_code}" != "201" ]]; then
+  err "VERIFY FAIL File Browser upload (HTTP ${upload_code})"
+  cat /tmp/fb_upload.json 2>/dev/null || true
+  exit 1
+fi
+if [[ ! -f "${ROOT_DIR}/uploads/temp/${SMOKE_NAME}/smoke.txt" ]]; then
+  err "VERIFY FAIL uploaded file not visible on host at uploads/temp/${SMOKE_NAME}/smoke.txt"
+  exit 1
+fi
+log "  OK upload → host uploads/temp/${SMOKE_NAME}/smoke.txt"
+
+delete_code="$(curl -sS -o /tmp/fb_del.json -w '%{http_code}' --max-time 20 \
+  -X DELETE "http://127.0.0.1:8081/api/resources/temp/${SMOKE_NAME}/smoke.txt" \
+  -H "X-Auth: ${FB_TOKEN}" || printf '000')"
+# Also remove the smoke directory
+curl -sS -o /dev/null --max-time 20 \
+  -X DELETE "http://127.0.0.1:8081/api/resources/temp/${SMOKE_NAME}/" \
+  -H "X-Auth: ${FB_TOKEN}" || true
+rm -rf "${ROOT_DIR}/uploads/temp/${SMOKE_NAME}" 2>/dev/null || true
+if [[ "${delete_code}" != "200" && "${delete_code}" != "204" ]]; then
+  err "VERIFY FAIL File Browser delete (HTTP ${delete_code})"
+  exit 1
+fi
+log "  OK delete smoke file → HTTP ${delete_code}"
+
 log "Post-deploy verification passed"
 
 log "Container status"
@@ -399,3 +526,13 @@ docker image prune -f
 
 log "Deploy finished successfully at $(date -u '+%Y-%m-%dT%H:%M:%SZ')"
 compose ps
+
+echo ""
+echo "================================================================"
+echo " File Browser"
+echo "   URL:      ${FILEBROWSER_PUBLIC_URL}"
+echo "   Username: ${FILEBROWSER_USERNAME}"
+echo "   Password: ${FILEBROWSER_PASSWORD}"
+echo "   Storage:  ${ROOT_DIR}/uploads  (reels/ users/ profile/ temp/)"
+echo "================================================================"
+echo ""
