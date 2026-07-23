@@ -19,7 +19,19 @@ Production web file manager for shared media under `/opt/hpys/uploads`.
 
 `deploy.sh` prints the username/password at the end of a successful deploy.
 
-**Never use File Browser’s default `admin`/`admin` password.** Init always sets the password from `.env`.
+**Never use File Browser’s default `admin`/`admin` password.** On first deploy, init creates the admin from `.env`. Later deploys do **not** rewrite the password via CLI (BoltDB lock); change it in the UI or stop the service and use CLI (below).
+
+## BoltDB lock (why CLI prints `timeout`)
+
+`database.db` is **BoltDB**, not SQLite. Only one process may open it. While `hpys-filebrowser` is running:
+
+```bash
+docker exec hpys-filebrowser /filebrowser users ls --database=/database.db
+# → Using database: /database.db
+# → timeout
+```
+
+That is expected. Official `users ls|add|update` commands are still supported on **v2.32.0**, but **only with the server stopped** (or against a DB copy). See `docs/FILEBROWSER_INIT.md`.
 
 ## Folder structure
 
@@ -96,42 +108,43 @@ docker compose up -d filebrowser
 
 ## Add users
 
+**Stop File Browser first** (releases BoltDB lock), then use an ephemeral CLI container — never `docker exec` on the live server:
+
 ```bash
+cd /opt/hpys
+docker compose stop filebrowser
 docker run --rm --user 1001:33 \
   -v /opt/hpys/filebrowser:/config \
   filebrowser/filebrowser:v2.32.0 \
-  users add NEWUSER 'StrongPasswordHere' --database /config/database.db
+  users add NEWUSER 'StrongPasswordHere' --perm.admin --database /config/database.db
+docker compose up -d filebrowser
 ```
 
-Grant admin:
-
-```bash
-docker run --rm --user 1001:33 \
-  -v /opt/hpys/filebrowser:/config \
-  filebrowser/filebrowser:v2.32.0 \
-  users update NEWUSER --perm.admin --database /config/database.db
-```
-
-Or use **Settings → User Management** in the web UI while logged in as admin.
+Or use **Settings → User Management** in the web UI while logged in as admin (preferred while the service is up).
 
 ## Change password
 
-1. Update `FILEBROWSER_PASSWORD` in `/opt/hpys/.env`
-2. Re-run `./deploy.sh` (init syncs the admin password), **or**:
+1. Prefer the web UI (Settings → User Management), **or**
+2. Update `FILEBROWSER_PASSWORD` in `/opt/hpys/.env` for documentation, then:
 
 ```bash
+cd /opt/hpys
+docker compose stop filebrowser
 docker run --rm --user 1001:33 \
   -v /opt/hpys/filebrowser:/config \
   filebrowser/filebrowser:v2.32.0 \
   users update admin -p 'NewStrongPassword' --database /config/database.db
+docker compose up -d filebrowser
 ```
+
+`./deploy.sh` verifies login via REST after start; a password mismatch is a **warning**, not a deploy failure (as long as the File Browser service is healthy).
 
 ## Upgrade
 
 1. Bump `FILEBROWSER_IMAGE` in `.env` (e.g. `filebrowser/filebrowser:v2.32.0`)
 2. `cd /opt/hpys && ./deploy.sh`
 
-Compose pulls the new image, reinits/syncs admin, and recreates `hpys-filebrowser`.
+Compose pulls the new image. First-run CLI init runs only if `database.db` is missing; existing DBs are left alone. Admin is checked via REST after the service is healthy.
 
 ## Security notes
 
