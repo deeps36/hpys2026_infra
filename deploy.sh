@@ -174,8 +174,25 @@ done
 
 chmod 600 .env || true
 mkdir -p data/uploads data/backups data/logs
-mkdir -p uploads/reels uploads/users uploads/profile uploads/temp
+mkdir -p uploads/reels uploads/users uploads/profile uploads/temp uploads/assets/gallery
 mkdir -p filebrowser
+
+# Seed static brand/gallery assets into the shared uploads volume.
+# seed-uploads/ is tracked in git; uploads/ is the runtime volume (gitignored).
+if [[ -d "${ROOT_DIR}/seed-uploads/assets" ]]; then
+  log "Seeding uploads/assets from seed-uploads/assets"
+  mkdir -p uploads/assets/gallery
+  [[ -f uploads/assets/logo.png ]] || cp -f "${ROOT_DIR}/seed-uploads/assets/logo.png" uploads/assets/logo.png
+  [[ -f uploads/assets/welcome-boys.jpeg ]] || cp -f "${ROOT_DIR}/seed-uploads/assets/welcome-boys.jpeg" uploads/assets/welcome-boys.jpeg
+  if [[ -d "${ROOT_DIR}/seed-uploads/assets/gallery" ]]; then
+    shopt -s nullglob
+    for f in "${ROOT_DIR}/seed-uploads/assets/gallery/"*; do
+      base="$(basename "$f")"
+      [[ -f "uploads/assets/gallery/${base}" ]] || cp -f "$f" "uploads/assets/gallery/${base}"
+    done
+    shopt -u nullglob
+  fi
+fi
 
 # One-time migrate legacy ./data/uploads → ./uploads (shared with File Browser)
 if [[ -d data/uploads ]] && [[ -z "$(ls -A uploads/reels 2>/dev/null || true)" ]]; then
