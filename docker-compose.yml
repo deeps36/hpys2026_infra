@@ -295,8 +295,7 @@ services:
     init: true
     stop_grace_period: 60s
     environment:
-      # Required when profile local-mysql is enabled (not fail-closed so external-DB deploys can parse compose)
-      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-}
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:?MYSQL_ROOT_PASSWORD is required when local-mysql profile is enabled}
       MYSQL_DATABASE: ${DB_DATABASE:-hpys_db}
       MYSQL_USER: ${DB_USERNAME:-hpys}
       MYSQL_PASSWORD: ${DB_PASSWORD:?DB_PASSWORD is required}
@@ -306,14 +305,16 @@ services:
       - --collation-server=utf8mb4_unicode_ci
       - --innodb-buffer-pool-size=${MYSQL_INNODB_BUFFER_POOL:-512M}
       - --disable-log-bin
+    ports:
+      # Set MYSQL_PUBLISH=0.0.0.0:3306:3306 to expose publicly (not recommended on prod)
+      - "${MYSQL_PUBLISH:-127.0.0.1:3306:3306}"
     volumes:
-      - ./data/mysql:/var/lib/mysql
+      # Named volume (default). Set MYSQL_DATA_DIR=./data/mysql to use the bind mount instead.
+      - ${MYSQL_DATA_DIR:-mysql_data}:/var/lib/mysql
       - ./mysql/init-databases.sh:/docker-entrypoint-initdb.d/01-init-databases.sh:ro
       - ./data/backups:/backups:ro
     networks:
       - backend-network
-    expose:
-      - "3306"
     logging: *default-logging
     security_opt:
       - no-new-privileges:true
@@ -325,11 +326,11 @@ services:
       test:
         [
           "CMD-SHELL",
-          "mysqladmin ping -h 127.0.0.1 -uroot -p\"$$MYSQL_ROOT_PASSWORD\" --silent || exit 1",
+          "mysqladmin ping -h localhost -uroot -p\"$$MYSQL_ROOT_PASSWORD\" --silent || exit 1",
         ]
       interval: 10s
       timeout: 5s
-      retries: 12
+      retries: 10
       start_period: 60s
 
 networks:
@@ -339,3 +340,7 @@ networks:
   backend-network:
     name: hpys-backend-network
     driver: bridge
+
+volumes:
+  mysql_data:
+    name: hpys-mysql-data
