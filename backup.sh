@@ -57,7 +57,7 @@ dump_one() {
     local root_pw
     root_pw="$(read_env MYSQL_ROOT_PASSWORD)"
     docker exec -e MYSQL_PWD="${root_pw}" "${CONTAINER}" \
-      mysqldump -uroot --single-transaction --routines --triggers --events \
+      mysqldump -uroot --single-transaction --routines --triggers --events --no-tablespaces \
         --hex-blob --max-allowed-packet=512M --set-gtid-purged=OFF \
         --databases "${db_name}" >> "${OUT_SQL}"
   else
@@ -66,7 +66,7 @@ dump_one() {
     }
     docker run --rm -e MYSQL_PWD="${pass}" mysql:8.0.43 \
       mysqldump -h"${host}" -P"${port}" -u"${user}" \
-        --single-transaction --routines --triggers --events \
+        --single-transaction --routines --triggers --events --no-tablespaces \
         --hex-blob --max-allowed-packet=512M --set-gtid-purged=OFF \
         --databases "${db_name}" >> "${OUT_SQL}"
   fi

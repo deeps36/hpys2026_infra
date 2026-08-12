@@ -81,6 +81,7 @@ function dumpOne({ host, port, user, password, database, outSqlPath }) {
         '--routines',
         '--triggers',
         '--events',
+        '--no-tablespaces',
         '--hex-blob',
         '--max-allowed-packet=512M',
         '--set-gtid-purged=OFF',

@@ -126,8 +126,9 @@ if [[ -f "${OUT_GZ}" ]]; then
   exit 5
 fi
 
+# --no-tablespaces: DB user often lacks PROCESS (Hostinger / locked-down MySQL)
 mysqldump -h"${CONNECT_HOST}" -P"${DB_PORT}" -u"${DB_USERNAME}" \
-  --single-transaction --routines --triggers --events \
+  --single-transaction --routines --triggers --events --no-tablespaces \
   --hex-blob --max-allowed-packet=512M --set-gtid-purged=OFF \
   --databases "${DB_DATABASE}" > "${OUT_SQL}"
 
