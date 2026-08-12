@@ -187,7 +187,7 @@ services:
       WHATSAPP_REQUIRE_OTP_TEMPLATE: ${WHATSAPP_REQUIRE_OTP_TEMPLATE:-0}
       WHATSAPP_MAX_RETRIES: ${WHATSAPP_MAX_RETRIES:-3}
 
-      # Optional S3 media uploads (awa1.1+). If unset, local ./data/uploads fallback is used.
+      # Optional S3 (avatars / unrelated features). Poll media does NOT use S3.
       AWS_REGION: ${AWS_REGION:-}
       AWS_S3_BUCKET_NAME: ${AWS_S3_BUCKET_NAME:-}
       AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:-}
@@ -195,10 +195,26 @@ services:
 
       LUDOKING_API_KEY: ${LUDOKING_API_KEY:-}
 
-      # Shared with File Browser (/opt/hpys/uploads). New reels land in uploads/reels/.
+      # Shared with File Browser (/opt/hpys/uploads). Reels → uploads/reels/; Poll → uploads/poll/.
       UPLOADS_DIR: /app/uploads
       UPLOAD_MAX_BYTES: ${UPLOAD_MAX_BYTES:-21474836480}
       JSON_BODY_LIMIT: ${JSON_BODY_LIMIT:-100mb}
+
+      # Poll media (Oracle persistent disk via ./uploads volume)
+      LIVE_QUIZ_MEDIA_PROVIDER: ${LIVE_QUIZ_MEDIA_PROVIDER:-local}
+      LIVE_QUIZ_MEDIA_ROOT: ${LIVE_QUIZ_MEDIA_ROOT:-/app/uploads/poll}
+      LIVE_QUIZ_MEDIA_PUBLIC_BASE_URL: ${LIVE_QUIZ_MEDIA_PUBLIC_BASE_URL:-/media/poll}
+      LIVE_QUIZ_MAX_IMAGE_BYTES: ${LIVE_QUIZ_MAX_IMAGE_BYTES:-5242880}
+      LIVE_QUIZ_MAX_AUDIO_BYTES: ${LIVE_QUIZ_MAX_AUDIO_BYTES:-20971520}
+      LIVE_QUIZ_MAX_VIDEO_BYTES: ${LIVE_QUIZ_MAX_VIDEO_BYTES:-104857600}
+
+      # Live Quiz Redis (optional — leave unset for MySQL-only; enable local-redis profile)
+      REDIS_URL: ${REDIS_URL:-}
+      REDIS_HOST: ${REDIS_HOST:-}
+      REDIS_PORT: ${REDIS_PORT:-6379}
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-}
+      REDIS_TLS: ${REDIS_TLS:-0}
+      REDIS_DB: ${REDIS_DB:-0}
     ports:
       - "127.0.0.1:8000:8000"
     volumes:
@@ -339,6 +355,46 @@ services:
       retries: 10
       start_period: 60s
 
+  # Optional Redis for Live Quiz live state / locks / leaderboard acceleration.
+  # NOT started by default — enable with COMPOSE_PROFILES=...,local-redis
+  # Do NOT run FLUSHALL/FLUSHDB against production Redis.
+  redis:
+    profiles:
+      - local-redis
+    image: redis:7-alpine
+    pull_policy: missing
+    platform: linux/arm64
+    container_name: hpys-redis
+    restart: unless-stopped
+    init: true
+    command:
+      - redis-server
+      - --appendonly
+      - "yes"
+      - --maxmemory
+      - ${REDIS_MAXMEMORY:-256mb}
+      - --maxmemory-policy
+      - ${REDIS_MAXMEMORY_POLICY:-allkeys-lru}
+    ports:
+      - "${REDIS_PUBLISH:-127.0.0.1:6379:6379}"
+    volumes:
+      - ${REDIS_DATA_DIR:-redis_data}:/data
+    networks:
+      - backend-network
+    logging: *default-logging
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 256
+    cpus: 0.5
+    mem_limit: 384m
+    mem_reservation: 64m
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 5s
+
 networks:
   frontend-network:
     name: hpys-frontend-network
@@ -350,3 +406,5 @@ networks:
 volumes:
   mysql_data:
     name: hpys-mysql-data
+  redis_data:
+    name: hpys-redis-data

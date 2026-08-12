@@ -1,0 +1,48 @@
+# Local-only MySQL + Redis for Poll / Live Quiz testing on Windows (amd64).
+# Does NOT start production frontend/backend containers.
+# Never points at Oracle/Hostinger production.
+
+services:
+  mysql:
+    image: mysql:8.0.43
+    container_name: hpys-local-mysql
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: localroot
+      MYSQL_DATABASE: hpys_db
+      MYSQL_USER: hpys
+      MYSQL_PASSWORD: localhpys
+    command:
+      - --max_allowed_packet=512M
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_unicode_ci
+      - --disable-log-bin
+    ports:
+      - "127.0.0.1:3306:3306"
+    volumes:
+      - hpys_local_mysql_data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "-uroot", "-plocalroot"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+      start_period: 20s
+
+  redis:
+    image: redis:7-alpine
+    container_name: hpys-local-redis
+    restart: unless-stopped
+    command: ["redis-server", "--maxmemory", "256mb", "--maxmemory-policy", "allkeys-lru"]
+    ports:
+      - "127.0.0.1:6379:6379"
+    volumes:
+      - hpys_local_redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+volumes:
+  hpys_local_mysql_data:
+  hpys_local_redis_data:
