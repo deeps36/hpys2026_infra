@@ -540,6 +540,23 @@ if (( all_healthy != 1 )); then
   exit 1
 fi
 
+# Existing MySQL volumes skip docker-entrypoint-initdb.d — ensure Instances DB + grants exist.
+if uses_local_mysql && docker ps --format '{{.Names}}' | grep -qx 'hpys-mysql'; then
+  INSTANCES_DB_NAME_VAL="$(read_env INSTANCES_DB_NAME)"
+  INSTANCES_DB_NAME_VAL="${INSTANCES_DB_NAME_VAL:-hpys_instances_db}"
+  DB_USER_VAL="$(read_env DB_USERNAME)"
+  DB_USER_VAL="${DB_USER_VAL:-hpys}"
+  MYSQL_ROOT_PW="$(read_env MYSQL_ROOT_PASSWORD)"
+  log "Ensuring Instances database exists: ${INSTANCES_DB_NAME_VAL} (user=${DB_USER_VAL})"
+  if docker exec -e MYSQL_PWD="${MYSQL_ROOT_PW}" hpys-mysql \
+    mysql -uroot -e "CREATE DATABASE IF NOT EXISTS \`${INSTANCES_DB_NAME_VAL}\` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci; GRANT ALL PRIVILEGES ON \`${INSTANCES_DB_NAME_VAL}\`.* TO '${DB_USER_VAL}'@'%'; FLUSH PRIVILEGES;" \
+    >/dev/null 2>&1; then
+    log "Instances database ready"
+  else
+    log "WARNING: could not ensure ${INSTANCES_DB_NAME_VAL} — Instances uploads may fail with Access denied"
+  fi
+fi
+
 log "Post-deploy verification (localhost)"
 http_code() {
   local method="${1:-GET}"

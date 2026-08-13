@@ -15,6 +15,7 @@ CREATE DATABASE IF NOT EXISTS \`hpys_reels_db_4\` CHARACTER SET utf8mb4 COLLATE 
 CREATE DATABASE IF NOT EXISTS \`hpys_reels_db_5\` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
 CREATE DATABASE IF NOT EXISTS \`hpys_reels_db_6\` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
 CREATE DATABASE IF NOT EXISTS \`hpys_profile_img\` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+CREATE DATABASE IF NOT EXISTS \`hpys_instances_db\` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
 
 GRANT ALL PRIVILEGES ON \`hpys_db\`.* TO '${MYSQL_USER}'@'%';
 GRANT ALL PRIVILEGES ON \`hpys_reels_metadata\`.* TO '${MYSQL_USER}'@'%';
@@ -25,6 +26,7 @@ GRANT ALL PRIVILEGES ON \`hpys_reels_db_4\`.* TO '${MYSQL_USER}'@'%';
 GRANT ALL PRIVILEGES ON \`hpys_reels_db_5\`.* TO '${MYSQL_USER}'@'%';
 GRANT ALL PRIVILEGES ON \`hpys_reels_db_6\`.* TO '${MYSQL_USER}'@'%';
 GRANT ALL PRIVILEGES ON \`hpys_profile_img\`.* TO '${MYSQL_USER}'@'%';
+GRANT ALL PRIVILEGES ON \`hpys_instances_db\`.* TO '${MYSQL_USER}'@'%';
 FLUSH PRIVILEGES;
 EOSQL
 
